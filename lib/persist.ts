@@ -18,7 +18,7 @@ import type {
   Word,
 } from './types';
 
-const DB_NAME = 'sub-easy-ifi';
+const DB_NAME = 'subifi';
 const DB_VERSION = 1;
 const STORE = 'session';
 const KEY = 'current';

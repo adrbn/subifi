@@ -1,4 +1,4 @@
-# Sub-Easy-Ifi
+# SubIFI
 
 Internal video subtitle editor. Upload a video, transcribe the voices with
 Groq Whisper-large-v3, fix/style the subtitles in a WYSIWYG editor, export
@@ -43,25 +43,36 @@ npm run dev
 6. Export:
    - **SRT / VTT / TXT / JSON** — generated in-browser, instant download.
    - **MP4 (burned)** — `ffmpeg.wasm` renders the styled subtitles into the
-     video using the `subtitles` (libass) filter. Takes a few seconds to a
-     minute depending on video length.
+     video using the `subtitles` (libass) filter. Uses the multi-threaded
+     ffmpeg core with a 1080p short-side cap and the `ultrafast` x264 preset,
+     so a typical phone clip burns in a handful of seconds.
 
 ## Tech
 
 - **Next.js 15** (App Router) + React 19 + TypeScript
 - **Tailwind CSS** for styling
 - **Zustand** for state
-- **ffmpeg.wasm** for audio extraction and subtitle burn-in
+- **ffmpeg.wasm** (multi-threaded core) for audio extraction and subtitle
+  burn-in
 - **Groq SDK** for Whisper transcription
+- **IndexedDB** for session persistence
 
 ## Notes
 
-- COOP/COEP headers are enabled globally so `SharedArrayBuffer` is available
-  to ffmpeg.wasm (`credentialless` mode so Google Fonts still work).
+- COOP/COEP headers (`same-origin` + `require-corp`) are set globally in
+  `next.config.ts` so `SharedArrayBuffer` is available to the multi-threaded
+  ffmpeg core. Google Fonts still load because the stylesheet `<link>` is
+  tagged `crossOrigin="anonymous"` (see `lib/google-fonts.ts`) and the
+  runtime font-fetch path uses explicit `mode: 'cors'` (see `lib/burn-in.ts`).
 - The `/api/transcribe` route has an in-memory rate limit (10 req/min/IP) to
   deter casual abuse. It resets on cold start.
-- No persistence: close the tab and you lose your work. Export early, export
-  often.
+- **Auto-resume on reload**: the editor snapshots the full session (video,
+  audio, blocks, style, fonts, overlays) to IndexedDB with an 800 ms debounce.
+  Accidentally close the tab → reopen the page → your work is still there.
+  "New video" clears both in-memory state and the persisted snapshot.
+- The mobile layout uses horizontally scrollable preset/export strips, a
+  stacked transcribe CTA, and a bottom tab bar to swap between the subtitle
+  list and the style panel.
 
 ## Out of scope (for now)
 
@@ -69,7 +80,6 @@ npm run dev
 - Waveform in the timeline
 - Undo/redo
 - Multi-project persistence / authentication
-- Mobile UI
 
-See `docs/superpowers/specs/2026-04-09-sub-easy-ifi-design.md` for the full
-design rationale.
+See `docs/superpowers/specs/2026-04-09-subifi-design.md` for the full design
+rationale.

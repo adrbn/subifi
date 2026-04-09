@@ -1,4 +1,4 @@
-# Sub-Easy-Ifi — Design Spec
+# SubIFI — Design Spec
 
 **Date:** 2026-04-09
 **Status:** Approved, implementation in progress
@@ -113,7 +113,7 @@ type ProjectState = {
 ### File structure
 
 ```
-sub-easy-ifi/
+subifi/
 ├── app/
 │   ├── layout.tsx
 │   ├── page.tsx                # composes editor

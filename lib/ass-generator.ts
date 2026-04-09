@@ -80,7 +80,7 @@ export function generateAss({
 
   const header = [
     '[Script Info]',
-    'Title: Sub-Easy-Ifi',
+    'Title: SubIFI',
     'ScriptType: v4.00+',
     `PlayResX: ${videoWidth}`,
     `PlayResY: ${videoHeight}`,

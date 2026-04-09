@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/button';
 const PREVIEW_PCT_MIN = 25;
 const PREVIEW_PCT_MAX = 85;
 const PREVIEW_PCT_DEFAULT = 62;
-const PREVIEW_PCT_STORAGE_KEY = 'sub-easy-ifi:previewPct';
+const PREVIEW_PCT_STORAGE_KEY = 'subifi:previewPct';
 
 // Main page. Two layouts share the same data:
 //  - Desktop (md+): hybrid — preview + timeline + subtitle list on the left
