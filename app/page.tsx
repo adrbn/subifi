@@ -38,7 +38,7 @@ const PREVIEW_PCT_STORAGE_KEY = 'subifi:previewPct';
 //    the StylePanel. The splitter is hidden because there's no meaningful
 //    horizontal space to redistribute.
 
-type MobileTab = 'subs' | 'style';
+type MobileTab = 'subs' | 'timeline' | 'style';
 
 export default function Page() {
   const {
@@ -423,60 +423,66 @@ export default function Page() {
               {/* Transcribe gate — shown when audio is ready but blocks are empty */}
               <TranscribeButton />
 
-              {/* Presets + Translate + Export bars — tighter vertical rhythm on mobile */}
-              <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 sm:gap-2 sm:py-2">
+              {/* Desktop: bars + timeline always visible above subtitle list */}
+              <div className="hidden shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 sm:gap-2 sm:py-2 md:flex">
                 <PresetsBar />
                 <TranslateBar />
                 <ExportBar />
               </div>
-
-              {/* Mini timeline */}
-              <div className="shrink-0 border-b border-border bg-bg-elev px-3 py-1.5 sm:py-2">
+              <div className="hidden shrink-0 border-b border-border bg-bg-elev px-3 py-1.5 sm:py-2 md:block">
                 <Timeline />
               </div>
 
-              {/* Mobile tab bar — swaps the panel below between subs and
-                  style. Larger touch targets (py-3 = 48px row) on mobile. */}
+              {/* Mobile tab bar — 3 tabs to save vertical space */}
               <div className="flex shrink-0 items-stretch border-b border-border bg-bg-elev md:hidden">
-                <button
-                  type="button"
-                  onClick={() => setMobileTab('subs')}
-                  className={clsx(
-                    'flex-1 px-3 py-3 text-sm font-medium',
-                    mobileTab === 'subs'
-                      ? 'border-b-2 border-accent text-text'
-                      : 'text-text-muted',
-                  )}
-                >
-                  Sous-titres
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobileTab('style')}
-                  className={clsx(
-                    'flex-1 px-3 py-3 text-sm font-medium',
-                    mobileTab === 'style'
-                      ? 'border-b-2 border-accent text-text'
-                      : 'text-text-muted',
-                  )}
-                >
-                  Style
-                </button>
+                {(['subs', 'timeline', 'style'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setMobileTab(tab)}
+                    className={clsx(
+                      'flex-1 px-2 py-3 text-sm font-medium',
+                      mobileTab === tab
+                        ? 'border-b-2 border-accent text-text'
+                        : 'text-text-muted',
+                    )}
+                  >
+                    {tab === 'subs' && 'Sous-titres'}
+                    {tab === 'timeline' && 'Timeline'}
+                    {tab === 'style' && 'Style'}
+                  </button>
+                ))}
               </div>
 
-              {/* Subtitle list / Style panel content area.
-                  - Desktop: always shows the SubtitleList
-                  - Mobile: shows either the SubtitleList or the StylePanel
-                    depending on the active tab. */}
+              {/* Tab content — desktop always shows SubtitleList, mobile swaps */}
               <div className="min-h-0 flex-1 bg-bg">
+                {/* Sous-titres: bars + subtitle list */}
                 <div
                   className={clsx(
-                    'h-full',
-                    mobileTab !== 'subs' && 'hidden md:block',
+                    'flex h-full flex-col',
+                    mobileTab !== 'subs' && 'hidden md:flex',
                   )}
                 >
-                  <SubtitleList />
+                  {/* Bars inside tab on mobile only */}
+                  <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 md:hidden">
+                    <PresetsBar />
+                    <TranslateBar />
+                    <ExportBar />
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <SubtitleList />
+                  </div>
                 </div>
+                {/* Timeline tab — mobile only */}
+                <div
+                  className={clsx(
+                    'h-full overflow-auto bg-bg-elev px-3 py-2 md:hidden',
+                    mobileTab !== 'timeline' && 'hidden',
+                  )}
+                >
+                  <Timeline />
+                </div>
+                {/* Style tab — mobile only */}
                 <div
                   className={clsx(
                     'h-full md:hidden',

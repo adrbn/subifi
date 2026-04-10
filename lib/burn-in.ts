@@ -158,7 +158,11 @@ function buildOverlayComplex(
       alpha < 0.999
         ? `,format=rgba,colorchannelmixer=aa=${alpha.toFixed(3)}`
         : ',format=rgba';
-    parts.push(`[${inputIdx}:v]scale=${scaleW}:-1${alphaExpr}[img${i}]`);
+    // `loop=-1:size=1:start=0` turns the single-frame PNG/JPG into an
+    // infinite stream. Without this, the overlay filter deadlocks in
+    // ffmpeg-wasm after consuming the one frame (eof_action=repeat is
+    // broken in the wasm threading model).
+    parts.push(`[${inputIdx}:v]loop=loop=-1:size=1:start=0,scale=${scaleW}:-1${alphaExpr}[img${i}]`);
 
     const posX = `(main_w*${ov.positionX.toFixed(4)})-(overlay_w/2)`;
     const posY = `(main_h*${ov.positionY.toFixed(4)})-(overlay_h/2)`;
