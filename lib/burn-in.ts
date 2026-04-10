@@ -197,50 +197,40 @@ function extForMime(mime: string): string {
 // Decode a data-URL image to raw RGBA pixels using OffscreenCanvas. This
 // lets us feed images to ffmpeg as rawvideo, completely sidestepping the
 // PNG/JPEG decoder threading issues that cause deadlocks in ffmpeg-wasm.
-async function decodeImageToRGBA(dataUrl: string): Promise<{
-  rgba: Uint8Array;
-  width: number;
-  height: number;
-}> {
-  // Try OffscreenCanvas first (works in Web Workers), fall back to a DOM
-  // canvas + <img> if that produces 0 bytes (Safari/some Chrome builds).
-  try {
-    const res = await fetch(dataUrl);
-    const blob = await res.blob();
-    const bitmap = await createImageBitmap(blob);
-    const { width, height } = bitmap;
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(bitmap, 0, 0);
-    const imageData = ctx.getImageData(0, 0, width, height);
-    bitmap.close();
-    const expected = width * height * 4;
-    if (imageData.data.length === expected) {
-      const rgba = new Uint8Array(expected);
-      rgba.set(imageData.data);
-      return { rgba, width, height };
-    }
-    console.warn('[burn] OffscreenCanvas returned wrong size, falling back to DOM canvas');
-  } catch (e) {
-    console.warn('[burn] OffscreenCanvas failed, falling back to DOM canvas', e);
-  }
-
-  // Fallback: load via <img> + regular <canvas>
+// Decode and pre-scale an image overlay to raw RGBA at the exact pixel
+// dimensions it will occupy in the output video. Returning the frame at
+// final size lets us skip the `scale` filter in ffmpeg AND means we can
+// duplicate the small frame to fill the video duration without using
+// `-stream_loop` (which deadlocks in ffmpeg-wasm).
+//
+// Uses a DOM <img> + <canvas> (reliable on all browsers including mobile
+// Safari) rather than OffscreenCanvas whose 2D context is broken on some
+// mobile builds and silently returns empty ImageData.
+async function decodeImageScaled(
+  dataUrl: string,
+  targetWidth: number,
+): Promise<{ rgba: Uint8Array; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const { naturalWidth: width, naturalHeight: height } = img;
+      const { naturalWidth, naturalHeight } = img;
+      const w = Math.max(1, Math.round(targetWidth));
+      const h = Math.max(1, Math.round((naturalHeight / naturalWidth) * w));
+      // Force even dimensions for YUV compat
+      const fw = w % 2 === 0 ? w : w + 1;
+      const fh = h % 2 === 0 ? h : h + 1;
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = fw;
+      canvas.height = fh;
       const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0);
-      const imageData = ctx.getImageData(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, fw, fh);
+      const imageData = ctx.getImageData(0, 0, fw, fh);
       const rgba = new Uint8Array(imageData.data.length);
       rgba.set(imageData.data);
-      resolve({ rgba, width, height });
+      console.debug(`[burn] decoded+scaled image: ${naturalWidth}x${naturalHeight} → ${fw}x${fh} (${rgba.byteLength} bytes/frame)`);
+      resolve({ rgba, width: fw, height: fh });
     };
-    img.onerror = () => reject(new Error('Failed to decode image'));
+    img.onerror = () => reject(new Error('Failed to decode image overlay'));
     img.src = dataUrl;
   });
 }
@@ -248,29 +238,25 @@ async function decodeImageToRGBA(dataUrl: string): Promise<{
 type OverlayMeta = { name: string; width: number; height: number };
 
 // Build the ffmpeg filter_complex string that chains the subtitle burn with
-// N image overlays. Each overlay is a rawvideo input (pre-decoded in JS) so
-// we avoid PNG/JPEG decoding inside ffmpeg-wasm's broken threading model.
+// N image overlays. Images are pre-scaled in JS so no scale filter is needed.
 function buildOverlayComplex(
   overlays: ImageOverlay[],
   overlayMetas: OverlayMeta[],
   subsFilter: string,
-  effectiveWidth: number,
   videoSource: string,
   videoDuration: number,
 ): string {
   const parts: string[] = [`${videoSource}${subsFilter}[v0]`];
   overlays.forEach((ov, i) => {
     const inputIdx = i + 1;
-    const scaleW = Math.max(1, Math.round(effectiveWidth * ov.width));
     const alpha = Math.max(0, Math.min(1, ov.opacity));
     const alphaExpr =
       alpha < 0.999
-        ? `,colorchannelmixer=aa=${alpha.toFixed(3)}`
-        : '';
-    // The rawvideo input is already RGBA. Scale to target width, apply
-    // alpha if needed. No loop/movie filter required — the input is
-    // looped at the demuxer level via -stream_loop.
-    parts.push(`[${inputIdx}:v]scale=${scaleW}:-1${alphaExpr}[img${i}]`);
+        ? `[${inputIdx}:v]colorchannelmixer=aa=${alpha.toFixed(3)}[img${i}]`
+        : `[${inputIdx}:v]null[img${i}]`;
+    // Image is pre-scaled in JS — no scale filter needed. Just apply
+    // alpha if required.
+    parts.push(alphaExpr);
 
     const posX = `(main_w*${ov.positionX.toFixed(4)})-(overlay_w/2)`;
     const posY = `(main_h*${ov.positionY.toFixed(4)})-(overlay_h/2)`;
@@ -612,18 +598,41 @@ export async function burnSubtitles(
     }
     await ff.writeFile(subsName, new TextEncoder().encode(assContent));
 
-    // Decode each image overlay to raw RGBA pixels in JavaScript and write
-    // them as rawvideo files. This completely avoids PNG/JPEG decoding
-    // inside ffmpeg-wasm, which deadlocks due to threading issues.
+    // Decode each image overlay, pre-scale to its final pixel size in JS,
+    // then write enough duplicate raw RGBA frames to cover the video
+    // duration at 1fps. This avoids:
+    //   - PNG decoding inside ffmpeg-wasm (threading deadlock)
+    //   - `-stream_loop` on rawvideo (stalls in wasm)
+    // At 1fps the overlay filter holds each frame for 1s — perfect for
+    // static images. Memory cost: ~(W×H×4×duration_s) per overlay, which
+    // for a 200×150 overlay on a 3-minute video ≈ 21 MB.
+    const OVERLAY_FPS = 1;
     const overlayMetas: OverlayMeta[] = [];
+    // Track which overlays actually decoded successfully — the filtered
+    // list is what buildOverlayComplex receives so indices stay in sync.
+    const decodedOverlays: ImageOverlay[] = [];
     for (let i = 0; i < effectiveOverlays.length; i++) {
       const ov = effectiveOverlays[i];
-      const decoded = await decodeImageToRGBA(ov.dataUrl);
+      const scaleW = Math.max(1, Math.round(videoWidth * ov.width));
+      const decoded = await decodeImageScaled(ov.dataUrl, scaleW);
+      if (decoded.rgba.byteLength === 0) {
+        console.error(`[burn] overlay ${i} decoded to 0 bytes — skipping`);
+        continue;
+      }
+      // Duplicate the single frame to fill the video duration at OVERLAY_FPS
+      const frameCount = Math.max(1, Math.ceil(videoDuration * OVERLAY_FPS) + 1);
+      const frameBytes = decoded.rgba.byteLength;
+      const totalBytes = frameCount * frameBytes;
+      const buf = new Uint8Array(totalBytes);
+      for (let f = 0; f < frameCount; f++) {
+        buf.set(decoded.rgba, f * frameBytes);
+      }
       const name = `overlay_${i}.raw`;
-      await ff.writeFile(name, decoded.rgba);
+      await ff.writeFile(name, buf);
       overlayNames.push(name);
       overlayMetas.push({ name, width: decoded.width, height: decoded.height });
-      console.debug(`[burn] decoded overlay ${i} to raw RGBA: ${decoded.width}x${decoded.height} (${decoded.rgba.byteLength} bytes)`);
+      decodedOverlays.push(ov);
+      console.debug(`[burn] overlay ${i}: ${decoded.width}x${decoded.height}, ${frameCount} frames @ ${OVERLAY_FPS}fps (${(totalBytes / 1024 / 1024).toFixed(1)} MB)`);
     }
 
     // Auto-cap export resolution to 1080p on the short side. This is the
@@ -680,11 +689,11 @@ export async function burnSubtitles(
     // require a trim+concat prefix. The simple `-vf` path only works for
     // the no-cuts/no-overlays case because `-vf` and `-filter_complex` are
     // mutually exclusive in ffmpeg.
-    if (effectiveOverlays.length > 0 || cutPrefix) {
+    if (decodedOverlays.length > 0 || cutPrefix) {
       const filterParts: string[] = [];
       if (cutPrefix) filterParts.push(cutPrefix.filter);
 
-      if (effectiveOverlays.length > 0) {
+      if (decodedOverlays.length > 0) {
         // Effective duration after cuts — needed for the full-duration
         // optimisation in buildOverlayComplex.
         const effectiveDuration = cutPrefix
@@ -695,10 +704,9 @@ export async function burnSubtitles(
           : videoDuration;
         filterParts.push(
           buildOverlayComplex(
-            effectiveOverlays,
+            decodedOverlays,
             overlayMetas,
             subsFilter,
-            effectiveWidth,
             vSource,
             effectiveDuration,
           ),
@@ -715,20 +723,18 @@ export async function burnSubtitles(
       // Map to the last label produced by the overlay chain, or [vout]
       // when there are no overlays.
       const finalLabel =
-        effectiveOverlays.length > 0
-          ? `[v${effectiveOverlays.length}]`
+        decodedOverlays.length > 0
+          ? `[v${decodedOverlays.length}]`
           : '[vout]';
       const args: string[] = ['-i', inputName];
-      // Each overlay is a raw RGBA file looped via -stream_loop. Using
-      // rawvideo avoids the PNG decoder and the associated threading
-      // deadlock in ffmpeg-wasm.
+      // Each overlay is a pre-scaled raw RGBA file with enough duplicate
+      // frames at 1fps to cover the video duration. No -stream_loop needed.
       for (const meta of overlayMetas) {
         args.push(
-          '-stream_loop', '-1',
           '-f', 'rawvideo',
           '-pixel_format', 'rgba',
           '-video_size', `${meta.width}x${meta.height}`,
-          '-framerate', '25',
+          '-framerate', String(OVERLAY_FPS),
           '-i', meta.name,
         );
       }
