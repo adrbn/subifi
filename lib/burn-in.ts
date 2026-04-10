@@ -202,16 +202,47 @@ async function decodeImageToRGBA(dataUrl: string): Promise<{
   width: number;
   height: number;
 }> {
-  const res = await fetch(dataUrl);
-  const blob = await res.blob();
-  const bitmap = await createImageBitmap(blob);
-  const { width, height } = bitmap;
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(bitmap, 0, 0);
-  const imageData = ctx.getImageData(0, 0, width, height);
-  bitmap.close();
-  return { rgba: new Uint8Array(imageData.data.buffer), width, height };
+  // Try OffscreenCanvas first (works in Web Workers), fall back to a DOM
+  // canvas + <img> if that produces 0 bytes (Safari/some Chrome builds).
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const bitmap = await createImageBitmap(blob);
+    const { width, height } = bitmap;
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(bitmap, 0, 0);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    bitmap.close();
+    const expected = width * height * 4;
+    if (imageData.data.length === expected) {
+      const rgba = new Uint8Array(expected);
+      rgba.set(imageData.data);
+      return { rgba, width, height };
+    }
+    console.warn('[burn] OffscreenCanvas returned wrong size, falling back to DOM canvas');
+  } catch (e) {
+    console.warn('[burn] OffscreenCanvas failed, falling back to DOM canvas', e);
+  }
+
+  // Fallback: load via <img> + regular <canvas>
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const { naturalWidth: width, naturalHeight: height } = img;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const rgba = new Uint8Array(imageData.data.length);
+      rgba.set(imageData.data);
+      resolve({ rgba, width, height });
+    };
+    img.onerror = () => reject(new Error('Failed to decode image'));
+    img.src = dataUrl;
+  });
 }
 
 type OverlayMeta = { name: string; width: number; height: number };
