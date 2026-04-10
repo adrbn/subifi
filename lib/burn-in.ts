@@ -1,6 +1,11 @@
 import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
-import { getFFmpeg, resetFFmpeg } from './ffmpeg-client';
+import {
+  getFFmpeg,
+  resetFFmpeg,
+  forceSingleThread,
+  isMultiThreaded,
+} from './ffmpeg-client';
 import { generateAss } from './ass-generator';
 import {
   getKeepRanges,
@@ -21,11 +26,23 @@ import type {
 // terminate the underlying worker. Cleared in the burn's finally block.
 let activeFFmpeg: FFmpeg | null = null;
 let cancelRequested = false;
+// Set when the stall watchdog terminates the worker so the finally block
+// knows to skip cleanup (same as cancelRequested but for stall-based abort).
+let stallTerminated = false;
 
 export class BurnCancelledError extends Error {
   constructor() {
     super('Burn cancelled');
     this.name = 'BurnCancelledError';
+  }
+}
+
+// Thrown when ffmpeg exec stalls (no progress events for STALL_ABORT_MS).
+// Caught by burnSubtitles() to auto-retry with single-threaded core.
+export class BurnStalledError extends Error {
+  constructor() {
+    super('Burn stalled — ffmpeg worker appears deadlocked');
+    this.name = 'BurnStalledError';
   }
 }
 
@@ -381,6 +398,29 @@ export async function burnSubtitles(
   input: BurnInput,
   onProgress?: BurnProgress,
 ): Promise<Uint8Array> {
+  try {
+    return await burnSubtitlesCore(input, onProgress);
+  } catch (err) {
+    // If the burn stalled, switch to single-threaded core and retry once.
+    // This handles the common case where @ffmpeg/core-mt deadlocks on
+    // Windows during libass rendering. forceSingleThread() is idempotent
+    // so calling it when already in ST mode is a no-op.
+    if (err instanceof BurnStalledError) {
+      console.warn(
+        '[burn] stall detected — switching to single-threaded core and retrying',
+      );
+      forceSingleThread();
+      onProgress?.(0);
+      return await burnSubtitlesCore(input, onProgress);
+    }
+    throw err;
+  }
+}
+
+async function burnSubtitlesCore(
+  input: BurnInput,
+  onProgress?: BurnProgress,
+): Promise<Uint8Array> {
   const {
     videoFile,
     blocks,
@@ -393,9 +433,9 @@ export async function burnSubtitles(
     cuts = [],
     videoDuration = 0,
   } = input;
-  // Reset the cancellation flag for this run. A previous burn might have
-  // left it set if it was cancelled and the user is starting a fresh one.
+  // Reset the cancellation / stall flags for this run.
   cancelRequested = false;
+  stallTerminated = false;
   const ff = await getFFmpeg();
   activeFFmpeg = ff;
 
@@ -478,6 +518,7 @@ export async function burnSubtitles(
   // in normal operation. Includes ALL the things that historically went
   // wrong silently: empty blocks after cuts, missing fonts, etc.
   console.debug('[burn] starting', {
+    mode: isMultiThreaded() ? 'multi-threaded' : 'single-threaded',
     blocks: blocks.length,
     effectiveBlocks: effectiveBlocks.length,
     textOverlays: textOverlays.length,
@@ -662,24 +703,42 @@ export async function burnSubtitles(
     const vSource = cutPrefix ? cutPrefix.vLabel : '[0:v]';
     const aMap = cutPrefix ? cutPrefix.aLabel : '0:a?';
 
-    // Watchdog: if exec runs for more than `STALL_THRESHOLD_MS` without
-    // any progress event, log a warning so we can tell whether the worker
-    // is hung in libass init vs. just slowly chewing through frames.
-    const STALL_THRESHOLD_MS = 10_000;
+    // Watchdog: detects two kinds of stall:
+    //   (a) No progress event at all for STALL_WARN_MS → log a warning.
+    //   (b) No progress event for STALL_ABORT_MS → assume deadlock (common
+    //       with @ffmpeg/core-mt on Windows), terminate the worker and throw
+    //       BurnStalledError. The outer burnSubtitles() wrapper catches this
+    //       and auto-retries with the single-threaded core.
+    const STALL_WARN_MS = 10_000;
+    const STALL_ABORT_MS = 30_000;
     const watchdogStart = Date.now();
     watchdog = setInterval(() => {
       const sinceProgress = Date.now() - lastProgressAt;
       const sinceStart = Date.now() - watchdogStart;
-      if (firstProgress && sinceStart > STALL_THRESHOLD_MS) {
-        console.warn(
-          `[burn] no progress events after ${Math.round(sinceStart / 1000)}s — ` +
-            `ffmpeg-wasm may still be initialising or is stuck. ` +
+      const elapsed = firstProgress ? sinceStart : sinceProgress;
+
+      if (elapsed > STALL_ABORT_MS) {
+        console.error(
+          `[burn] stall detected after ${Math.round(elapsed / 1000)}s — ` +
+            `terminating ffmpeg worker. Mode: ${isMultiThreaded() ? 'MT' : 'ST'}. ` +
             `Recent log: ${recentLogs.slice(-3).join(' | ')}`,
         );
-      } else if (!firstProgress && sinceProgress > STALL_THRESHOLD_MS) {
+        stallTerminated = true;
+        try {
+          ff.terminate();
+        } catch {
+          // ignore
+        }
+        if (activeFFmpeg === ff) activeFFmpeg = null;
+        resetFFmpeg();
+        return;
+      }
+      if (elapsed > STALL_WARN_MS) {
         console.warn(
-          `[burn] last progress event was ${Math.round(sinceProgress / 1000)}s ago — ` +
-            `encoding may have stalled.`,
+          `[burn] ${firstProgress ? 'no progress events' : 'last progress event was'} ` +
+            `${Math.round(elapsed / 1000)}s ago — ` +
+            `ffmpeg-wasm may still be initialising or is stuck. ` +
+            `Recent log: ${recentLogs.slice(-3).join(' | ')}`,
         );
       }
     }, 5_000);
@@ -839,8 +898,12 @@ export async function burnSubtitles(
     const data = await ff.readFile(outputName);
     return data as Uint8Array;
   } catch (err) {
-    // .exec() rejection after a terminate() looks like a generic error;
-    // promote it to our typed cancellation if a cancel was requested.
+    // Stall-triggered terminate: promote to BurnStalledError so the outer
+    // burnSubtitles() wrapper can catch it and retry with single-threaded.
+    if (stallTerminated && !(err instanceof BurnStalledError)) {
+      throw new BurnStalledError();
+    }
+    // .exec() rejection after a cancel-triggered terminate is expected.
     if (cancelRequested && !(err instanceof BurnCancelledError)) {
       throw new BurnCancelledError();
     }
@@ -851,15 +914,12 @@ export async function burnSubtitles(
       watchdog = null;
     }
     if (activeFFmpeg === ff) activeFFmpeg = null;
-    // After a cancel the worker has been terminated; ff.off() and the
-    // file-deletion calls below would fail. Skip cleanup in that case —
-    // resetFFmpeg() (called by cancelBurn) makes sure the next burn loads
-    // a fresh worker anyway.
-    if (!cancelRequested) {
+    // After a cancel or stall-terminate the worker is dead; ff.off() and
+    // file-deletion would fail. Skip cleanup — resetFFmpeg() ensures the
+    // next burn loads a fresh worker anyway.
+    if (!cancelRequested && !stallTerminated) {
       ff.off('log', logHandler);
       ff.off('progress', progressHandler);
-      // Best-effort cleanup of everything we wrote so subsequent burns start
-      // fresh and the wasm FS doesn't grow unbounded.
       for (const name of [inputName, subsName, outputName, ...overlayNames]) {
         try {
           await ff.deleteFile(name);

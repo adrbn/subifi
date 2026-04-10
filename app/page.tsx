@@ -570,8 +570,13 @@ export default function Page() {
                   <div className="mx-auto h-10 w-full rounded bg-border group-hover:bg-border-hi" style={{ marginTop: '50%' }} />
                 </div>
                 {/* Subtitle list pane */}
-                <div className="min-h-0 min-w-0 flex-1 overflow-auto bg-bg">
-                  <SubtitleList />
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
+                  <div className="shrink-0 px-2 pt-1 text-[10px] uppercase tracking-wider text-text-muted">
+                    Subtitles
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <SubtitleList />
+                  </div>
                 </div>
               </div>
 
