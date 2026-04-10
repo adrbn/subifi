@@ -88,12 +88,12 @@ export function TranslateBar() {
   };
 
   return (
-    <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 sm:mx-0 sm:flex-wrap sm:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
       <span className="w-20 shrink-0 text-xs uppercase tracking-wider text-text-muted">
         Traduire
       </span>
       <Select
-        className="h-8 w-32 shrink-0"
+        className="h-8 min-w-0 flex-1 sm:w-32 sm:flex-none"
         value={target}
         onChange={(e) => setTarget(e.target.value)}
         disabled={busy}
@@ -116,10 +116,10 @@ export function TranslateBar() {
             : `Translate ${blocks.length} blocks to ${target}`
         }
       >
-        {busy ? 'Translating…' : 'Traduire'}
+        {busy ? '…' : 'Go'}
       </Button>
       {error && (
-        <span className="shrink-0 truncate text-xs text-red-300" title={error}>
+        <span className="w-full truncate text-xs text-red-300" title={error}>
           {error}
         </span>
       )}

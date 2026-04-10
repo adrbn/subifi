@@ -619,13 +619,16 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   splitSelectedAtPlayhead: () =>
     set((s) => {
-      const t = s.currentTime;
       // Try subtitle block first
       if (s.selectedBlockId) {
         const idx = s.blocks.findIndex((b) => b.id === s.selectedBlockId);
         if (idx < 0) return s;
         const b = s.blocks[idx];
-        if (t <= b.start || t >= b.end) return s;
+        // If playhead is outside the block, split at midpoint instead of no-op.
+        const t =
+          s.currentTime > b.start && s.currentTime < b.end
+            ? s.currentTime
+            : (b.start + b.end) / 2;
         // Find character index closest to time t for text splitting
         const ratio = (t - b.start) / (b.end - b.start);
         const charIdx = Math.round(ratio * b.text.length);
@@ -669,12 +672,15 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         );
         if (idx < 0) return s;
         const o = s.textOverlays[idx];
-        if (t <= o.start || t >= o.end) return s;
-        const a: TextOverlay = { ...o, end: t };
+        const t2 =
+          s.currentTime > o.start && s.currentTime < o.end
+            ? s.currentTime
+            : (o.start + o.end) / 2;
+        const a: TextOverlay = { ...o, end: t2 };
         const b: TextOverlay = {
           ...o,
           id: Math.random().toString(36).slice(2, 10),
-          start: t,
+          start: t2,
         };
         return {
           ...pushHistory(s),
@@ -689,12 +695,15 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         );
         if (idx < 0) return s;
         const o = s.overlays[idx];
-        if (t <= o.start || t >= o.end) return s;
-        const a: ImageOverlay = { ...o, end: t };
+        const t3 =
+          s.currentTime > o.start && s.currentTime < o.end
+            ? s.currentTime
+            : (o.start + o.end) / 2;
+        const a: ImageOverlay = { ...o, end: t3 };
         const b: ImageOverlay = {
           ...o,
           id: Math.random().toString(36).slice(2, 10),
-          start: t,
+          start: t3,
         };
         return {
           ...pushHistory(s),

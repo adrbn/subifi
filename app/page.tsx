@@ -476,7 +476,7 @@ export default function Page() {
                 {/* Timeline tab — mobile only */}
                 <div
                   className={clsx(
-                    'h-full overflow-auto bg-bg-elev px-3 py-2 md:hidden',
+                    'flex h-full flex-col overflow-hidden bg-bg-elev px-3 py-2 md:hidden',
                     mobileTab !== 'timeline' && 'hidden',
                   )}
                 >

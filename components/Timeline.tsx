@@ -17,6 +17,21 @@ import { computeWaveformPeaks, WAVEFORM_BUCKETS } from '@/lib/waveform';
 //
 // Clicking the empty timeline area scrubs the video.
 
+// SVG eye icons for visibility toggles (avoids emoji rendering issues).
+const EyeIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+const EyeOffIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
 const HANDLE_PX = 6;
 // Snap threshold in pixels — applied once per drag tick against neighbor
 // edges and the playhead. Kept intentionally small (~5px) so the snap
@@ -433,11 +448,12 @@ export function Timeline() {
     ],
   );
 
-  // Click-to-scrub on empty area only — body/handle drags own the click.
+  // Click-to-scrub — works on any empty area. Block/overlay clicks call
+  // stopPropagation so they don't reach this handler.
   const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drag) return;
-    if (e.target !== e.currentTarget) return;
-    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect) return;
     const pct = (e.clientX - rect.left) / rect.width;
     scrub(Math.max(0, Math.min(1, pct)));
   };
@@ -451,7 +467,7 @@ export function Timeline() {
     !!selectedBlockId || !!selectedTextOverlayId || !!selectedOverlayId;
 
   return (
-    <div data-tour="timeline" className="flex flex-col gap-1">
+    <div data-tour="timeline" className="flex h-full flex-col gap-1">
       <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-text-muted">
         <span>Timeline</span>
         <div className="flex items-center gap-1.5">
@@ -525,7 +541,7 @@ export function Timeline() {
               className={`shrink-0 text-[11px] ${track.visible ? 'text-text' : 'text-text-muted/40'}`}
               title={track.visible ? 'Hide track' : 'Show track'}
             >
-              {track.visible ? '👁' : '👁‍🗨'}
+              {track.visible ? <EyeIcon /> : <EyeOffIcon />}
             </button>
             <span className="truncate text-text-muted">{track.label}</span>
           </div>
@@ -537,7 +553,7 @@ export function Timeline() {
             className={`shrink-0 text-[11px] ${textOverlaysVisible ? 'text-text' : 'text-text-muted/40'}`}
             title={textOverlaysVisible ? 'Hide text overlays' : 'Show text overlays'}
           >
-            {textOverlaysVisible ? '👁' : '👁‍🗨'}
+            {textOverlaysVisible ? <EyeIcon /> : <EyeOffIcon />}
           </button>
           <span className="truncate text-text-muted">Textes</span>
         </div>
@@ -548,7 +564,7 @@ export function Timeline() {
             className={`shrink-0 text-[11px] ${imageOverlaysVisible ? 'text-text' : 'text-text-muted/40'}`}
             title={imageOverlaysVisible ? 'Hide images' : 'Show images'}
           >
-            {imageOverlaysVisible ? '👁' : '👁‍🗨'}
+            {imageOverlaysVisible ? <EyeIcon /> : <EyeOffIcon />}
           </button>
           <span className="truncate text-text-muted">Images</span>
         </div>
@@ -559,14 +575,14 @@ export function Timeline() {
             className={`shrink-0 text-[11px] ${cutsVisible ? 'text-text' : 'text-text-muted/40'}`}
             title={cutsVisible ? 'Hide cuts' : 'Show cuts'}
           >
-            {cutsVisible ? '👁' : '👁‍🗨'}
+            {cutsVisible ? <EyeIcon /> : <EyeOffIcon />}
           </button>
           <span className="truncate text-text-muted">Coupes</span>
         </div>
       </div>
       <div
         ref={scrollRef}
-        className="relative flex-1 overflow-x-auto overflow-y-hidden rounded-r-md border border-border bg-bg-elev [scrollbar-width:thin]"
+        className="relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden rounded-r-md border border-border bg-bg-elev [scrollbar-width:thin]"
       >
       {/* Lane height: 30px per subtitle track + 30px text + 30px images + 30px cuts */}
       <div
@@ -575,7 +591,8 @@ export function Timeline() {
         style={{
           width: `${zoom * 100}%`,
           minWidth: '100%',
-          height: `${subtitleTracks.length * 30 + 90}px`,
+          minHeight: `${subtitleTracks.length * 30 + 90}px`,
+          height: '100%',
         }}
         onClick={onTrackClick}
         onWheel={onWheel}

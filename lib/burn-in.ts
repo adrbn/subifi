@@ -124,6 +124,67 @@ function isDetached(buffer: ArrayBuffer): boolean {
   }
 }
 
+// Read the font family name from a TTF/OTF name table. libass matches fonts
+// by the INTERNAL family name, not the filename. If this doesn't match what
+// the ASS Style line says, subtitles render invisible. Returns null on any
+// parse error — caller should fall back to the display name.
+function readFontFamilyName(buf: ArrayBuffer): string | null {
+  try {
+    const view = new DataView(buf);
+    if (buf.byteLength < 12) return null;
+    const numTables = view.getUint16(4);
+    let nameOffset = 0;
+    for (let i = 0; i < numTables; i++) {
+      const off = 12 + i * 16;
+      if (off + 16 > buf.byteLength) break;
+      const tag =
+        String.fromCharCode(view.getUint8(off)) +
+        String.fromCharCode(view.getUint8(off + 1)) +
+        String.fromCharCode(view.getUint8(off + 2)) +
+        String.fromCharCode(view.getUint8(off + 3));
+      if (tag === 'name') {
+        nameOffset = view.getUint32(off + 8);
+        break;
+      }
+    }
+    if (nameOffset === 0 || nameOffset + 6 > buf.byteLength) return null;
+
+    const count = view.getUint16(nameOffset + 2);
+    const storageOffset = nameOffset + view.getUint16(nameOffset + 4);
+
+    // Prefer Name ID 1 (Family) on platform 3 (Windows) encoding 1 (Unicode BMP).
+    // Also try platform 1 (Mac) as fallback.
+    let family: string | null = null;
+    for (let i = 0; i < count; i++) {
+      const rec = nameOffset + 6 + i * 12;
+      if (rec + 12 > buf.byteLength) break;
+      const platformID = view.getUint16(rec);
+      const encodingID = view.getUint16(rec + 2);
+      const nameID = view.getUint16(rec + 6);
+      const length = view.getUint16(rec + 8);
+      const strOff = view.getUint16(rec + 10);
+      if (nameID !== 1) continue;
+      const start = storageOffset + strOff;
+      if (start + length > buf.byteLength) continue;
+      if (platformID === 3 && encodingID === 1) {
+        // UTF-16 BE
+        const chars: number[] = [];
+        for (let j = 0; j < length; j += 2) chars.push(view.getUint16(start + j));
+        return String.fromCharCode(...chars);
+      }
+      if (platformID === 1 && !family) {
+        // Mac Roman — ASCII-ish
+        const bytes: number[] = [];
+        for (let j = 0; j < length; j++) bytes.push(view.getUint8(start + j));
+        family = String.fromCharCode(...bytes);
+      }
+    }
+    return family;
+  } catch {
+    return null;
+  }
+}
+
 function extForMime(mime: string): string {
   if (mime.includes('png')) return 'png';
   if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
@@ -401,17 +462,93 @@ export async function burnSubtitles(
     // Write input video.
     await ff.writeFile(inputName, await fetchFile(videoFile));
 
-    // Generate the ASS file (no embedded [Fonts] — libass loads fonts from
-    // the fontsdir directory below). The original burn pipeline that the
-    // user remembers as "working" used this exact directory-based approach,
-    // so we restore it. The modern features (multi-style, text overlays,
-    // karaoke) still go through generateAss, just without inlined fonts.
+    // --- Fetch fonts FIRST so we can read their internal family names ---
+    // libass matches fonts by the INTERNAL name table, not the filename.
+    // If the TTF's internal name differs from the display name the user
+    // chose (e.g. "Inter Variable" vs "Inter"), subtitles render invisible.
+    // We build a fontNameMap: displayName → internalName, then pass the
+    // remapped names to generateAss so the ASS Style lines always match.
+    try {
+      await ff.createDir(fontsDir);
+    } catch {
+      // may already exist
+    }
+
+    const fontNameMap = new Map<string, string>();
+    let fontsWritten = 0;
+
+    // Custom user-uploaded fonts.
+    for (const f of customFonts) {
+      if (isDetached(f.buffer)) {
+        console.warn(
+          `[burn] custom font "${f.name}" has a detached buffer — skipping.`,
+        );
+        continue;
+      }
+      const internal = readFontFamilyName(f.buffer);
+      if (internal) fontNameMap.set(f.name, internal);
+      await ff.writeFile(
+        `${fontsDir}/${f.name}.${f.format}`,
+        cloneBytesForFFmpeg(f.buffer),
+      );
+      fontsWritten++;
+    }
+
+    // Google Font for the main subtitle style.
+    const mainFont = await fetchGoogleFontFile(
+      style.fontFamily,
+      style.fontWeight,
+    );
+    if (mainFont) {
+      const internal = readFontFamilyName(mainFont.buffer);
+      if (internal) {
+        fontNameMap.set(style.fontFamily, internal);
+        console.debug(`[burn] font name remap: "${style.fontFamily}" → "${internal}"`);
+      }
+      await ff.writeFile(
+        `${fontsDir}/${mainFont.name}`,
+        cloneBytesForFFmpeg(mainFont.buffer),
+      );
+      fontsWritten++;
+    }
+
+    // Text overlay fonts (deduplicated).
+    const seen = new Set<string>([`${style.fontFamily}@${style.fontWeight}`]);
+    for (const t of textOverlays) {
+      const key = `${t.fontFamily}@${t.fontWeight}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const f = await fetchGoogleFontFile(t.fontFamily, t.fontWeight);
+      if (f) {
+        const internal = readFontFamilyName(f.buffer);
+        if (internal) fontNameMap.set(t.fontFamily, internal);
+        await ff.writeFile(
+          `${fontsDir}/${f.name}`,
+          cloneBytesForFFmpeg(f.buffer),
+        );
+        fontsWritten++;
+      }
+    }
+    console.debug('[burn] fonts written to fontsdir', { fontsWritten, fontNameMap: Object.fromEntries(fontNameMap) });
+    if (fontsWritten === 0) {
+      throw new Error(
+        'No fonts could be loaded for burning. Check that the selected font ' +
+          `("${style.fontFamily}") is available in our /api/font proxy or ` +
+          'upload it as a custom font, then try again.',
+      );
+    }
+
+    // --- Generate the ASS file with remapped font names ---
+    const remap = (name: string) => fontNameMap.get(name) ?? name;
     const assContent = generateAss({
       blocks: effectiveBlocks,
-      style,
+      style: { ...style, fontFamily: remap(style.fontFamily) },
       videoWidth,
       videoHeight,
-      textOverlays: effectiveTextOverlays,
+      textOverlays: effectiveTextOverlays.map((t) => ({
+        ...t,
+        fontFamily: remap(t.fontFamily),
+      })),
     });
     const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
     console.debug('[burn] ass file generated', {
@@ -427,81 +564,6 @@ export async function burnSubtitles(
       );
     }
     await ff.writeFile(subsName, new TextEncoder().encode(assContent));
-
-    // Create the fonts directory and write every font we need into it.
-    // libass scans this directory at filter init time and adds each readable
-    // font to its in-memory pool — that's how it matches the family name in
-    // the ASS Style line back to a real glyph table. The "can't find
-    // selected font provider" stderr line is misleading: it refers to the
-    // OS-level font lookup (fontconfig / coretext / directwrite), none of
-    // which are compiled into the ffmpeg-wasm core. The directory scan
-    // works regardless of those providers.
-    try {
-      await ff.createDir(fontsDir);
-    } catch {
-      // may already exist
-    }
-
-    // Custom user-uploaded fonts. We clone the bytes so the long-lived
-    // ArrayBuffer in the editor store stays intact even after the worker
-    // takes ownership of FS writes — without this, the next burn would
-    // throw "Cannot perform Construct on a detached ArrayBuffer".
-    let fontsWritten = 0;
-    for (const f of customFonts) {
-      if (isDetached(f.buffer)) {
-        console.warn(
-          `[burn] custom font "${f.name}" has a detached buffer — skipping. ` +
-            `Reload the page to recover the original bytes from IndexedDB.`,
-        );
-        continue;
-      }
-      await ff.writeFile(
-        `${fontsDir}/${f.name}.${f.format}`,
-        cloneBytesForFFmpeg(f.buffer),
-      );
-      fontsWritten++;
-    }
-
-    // Google Font for the main subtitle style. Fetched as TTF (not woff2)
-    // because the freetype baked into ffmpeg-wasm doesn't include brotli,
-    // so woff2 silently fails to decode. /api/font handles the TTF lookup
-    // (Fontsource → Google CSS scrape fallback).
-    const mainFont = await fetchGoogleFontFile(
-      style.fontFamily,
-      style.fontWeight,
-    );
-    if (mainFont) {
-      await ff.writeFile(
-        `${fontsDir}/${mainFont.name}`,
-        cloneBytesForFFmpeg(mainFont.buffer),
-      );
-      fontsWritten++;
-    }
-    // One file per unique family/weight used by text overlays. Same TTF
-    // lookup path. We dedupe so we don't waste a roundtrip on the family
-    // already covered by the main subtitle style.
-    const seen = new Set<string>([`${style.fontFamily}@${style.fontWeight}`]);
-    for (const t of textOverlays) {
-      const key = `${t.fontFamily}@${t.fontWeight}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const f = await fetchGoogleFontFile(t.fontFamily, t.fontWeight);
-      if (f) {
-        await ff.writeFile(
-          `${fontsDir}/${f.name}`,
-          cloneBytesForFFmpeg(f.buffer),
-        );
-        fontsWritten++;
-      }
-    }
-    console.debug('[burn] fonts written to fontsdir', { fontsWritten });
-    if (fontsWritten === 0) {
-      throw new Error(
-        'No fonts could be loaded for burning. Check that the selected font ' +
-          `("${style.fontFamily}") is available in our /api/font proxy or ` +
-          'upload it as a custom font, then try again.',
-      );
-    }
 
     // Write each image overlay to the ffmpeg FS so we can reference it as
     // a separate input. We use `effectiveOverlays` here because cut-driven
