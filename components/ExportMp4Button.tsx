@@ -101,7 +101,7 @@ export function ExportMp4Button() {
       data-tour="export"
       onClick={() => void onClick()}
       disabled={disabled}
-      className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-900/60 disabled:text-emerald-300/50"
+      className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-900/60 disabled:text-emerald-300/50"
       title={
         disabled && !hasAnyContent
           ? 'Add subtitles, text, or images first'
@@ -109,7 +109,7 @@ export function ExportMp4Button() {
       }
     >
       <span>▶</span>
-      <span>Export MP4</span>
+      <span>Export</span>
     </button>
   );
 }

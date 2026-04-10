@@ -167,14 +167,18 @@ export function SubtitleList() {
                       onClick={() => {
                         const ta = textareaRefs.current[b.id];
                         const pos = ta?.selectionStart ?? 0;
-                        // Only split when the caret is meaningfully inside
-                        // the text — otherwise we'd just produce an empty
-                        // sibling block.
-                        if (pos > 0 && pos < b.text.length) {
-                          splitBlockAt(b.id, pos);
+                        // If the caret is inside the text, split there.
+                        // Otherwise (mobile tap, caret at 0), split at
+                        // the midpoint so the button always works.
+                        const splitPos =
+                          pos > 0 && pos < b.text.length
+                            ? pos
+                            : Math.floor(b.text.length / 2);
+                        if (splitPos > 0 && splitPos < b.text.length) {
+                          splitBlockAt(b.id, splitPos);
                         }
                       }}
-                      title="Split at cursor (or press Shift+Enter)"
+                      title="Split subtitle in two"
                     >
                       ✂
                     </Button>

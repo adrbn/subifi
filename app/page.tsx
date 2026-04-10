@@ -465,10 +465,12 @@ export default function Page() {
                 >
                   {/* Bars inside tab on mobile — only when subtitles exist */}
                   {blocks.length > 0 && (
-                    <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 md:hidden">
-                      <PresetsBar />
-                      <TranslateBar />
-                      <ExportBar />
+                    <div className="shrink-0 border-b border-border bg-bg-elev px-2 py-1 md:hidden" style={{ fontSize: '0.7em' }}>
+                      <div className="flex flex-col gap-1 origin-top-left">
+                        <PresetsBar />
+                        <TranslateBar />
+                        <ExportBar />
+                      </div>
                     </div>
                   )}
                   <div className="min-h-0 flex-1">

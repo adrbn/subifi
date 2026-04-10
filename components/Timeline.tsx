@@ -131,6 +131,11 @@ export function Timeline() {
   const [zoom, setZoom] = useState(1);
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 32;
+  // Vertical lane height — adjustable via pinch on the labels sidebar.
+  const [laneH, setLaneH] = useState(30);
+  const LANE_H_MIN = 24;
+  const LANE_H_MAX = 80;
+  const labelsRef = useRef<HTMLDivElement>(null);
 
   // Decode the extracted audio once whenever it changes. The decode is
   // async + cancellable so a fast-clicking user doesn't apply stale peaks
@@ -329,6 +334,38 @@ export function Timeline() {
       el.removeEventListener('touchcancel', onEnd);
     };
   }, [zoom]);
+
+  // Pinch-to-zoom on the labels sidebar → vertical lane height.
+  const labelsPinchRef = useRef<{ dist: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = labelsRef.current;
+    if (!el) return;
+    const dist = (a: Touch, b: Touch) =>
+      Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        labelsPinchRef.current = { dist: dist(e.touches[0], e.touches[1]), h: laneH };
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !labelsPinchRef.current) return;
+      e.preventDefault();
+      const d = dist(e.touches[0], e.touches[1]);
+      const scale = d / labelsPinchRef.current.dist;
+      setLaneH(Math.round(Math.max(LANE_H_MIN, Math.min(LANE_H_MAX, labelsPinchRef.current.h * scale))));
+    };
+    const onEnd = () => { labelsPinchRef.current = null; };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, [laneH]);
 
   const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, z * 2));
   const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, z / 2));
@@ -561,13 +598,14 @@ export function Timeline() {
       </div>
       {/* Eye toggles + lane labels — sits to the left of the scroll area */}
       <div className="flex min-h-0 flex-1 gap-0">
-      <div className="flex flex-col gap-0 pt-0 shrink-0 w-20 border-r border-border bg-bg-elev rounded-l-md text-[9px]">
-        {subtitleTracks.map((track) => (
+      <div ref={labelsRef} className="flex flex-col gap-0 pt-0 shrink-0 w-20 border-r border-border bg-bg-elev rounded-l-md text-[9px]">
+        {subtitleTracks.map((track, idx) => (
           <div
             key={track.id}
-            className={`flex items-center gap-0.5 h-[30px] px-1 cursor-pointer border-b border-border/40 ${
+            className={`flex items-center gap-0.5 px-1 cursor-pointer border-b border-border/40 ${
               track.id === activeTrackId ? 'bg-accent/10' : ''
             }`}
+            style={{ height: laneH }}
             onClick={() => setActiveTrack(track.id)}
           >
             <button
@@ -578,10 +616,12 @@ export function Timeline() {
             >
               {track.visible ? <EyeIcon /> : <EyeOffIcon />}
             </button>
-            <span className="truncate text-text-muted">{track.label}</span>
+            <span className="truncate text-text-muted">
+              {track.label === 'Original' ? `Subs ${idx + 1}` : track.label}
+            </span>
           </div>
         ))}
-        <div className="flex items-center gap-0.5 h-[30px] px-1 border-b border-border/40">
+        <div className="flex items-center gap-0.5 px-1 border-b border-border/40" style={{ height: laneH }}>
           <button
             type="button"
             onClick={toggleTextOverlaysVisible}
@@ -592,7 +632,7 @@ export function Timeline() {
           </button>
           <span className="truncate text-text-muted">Textes</span>
         </div>
-        <div className="flex items-center gap-0.5 h-[30px] px-1 border-b border-border/40">
+        <div className="flex items-center gap-0.5 px-1 border-b border-border/40" style={{ height: laneH }}>
           <button
             type="button"
             onClick={toggleImageOverlaysVisible}
@@ -603,7 +643,7 @@ export function Timeline() {
           </button>
           <span className="truncate text-text-muted">Images</span>
         </div>
-        <div className="flex items-center gap-0.5 h-[30px] px-1">
+        <div className="flex items-center gap-0.5 px-1" style={{ height: laneH }}>
           <button
             type="button"
             onClick={toggleCutsVisible}
@@ -619,14 +659,13 @@ export function Timeline() {
         ref={scrollRef}
         className="relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden rounded-r-md border border-border bg-bg-elev [scrollbar-width:thin]"
       >
-      {/* Lane height: 30px per subtitle track + 30px text + 30px images + 30px cuts */}
       <div
         ref={trackRef}
         className="relative select-none"
         style={{
           width: `${zoom * 100}%`,
           minWidth: '100%',
-          minHeight: `${subtitleTracks.length * 30 + 90}px`,
+          minHeight: `${(subtitleTracks.length + 3) * laneH}px`,
           height: '100%',
         }}
         onClick={onTrackClick}
@@ -676,11 +715,11 @@ export function Timeline() {
             );
             const isActive = track.id === activeTrackId;
             const isSelected = isActive && selectedBlockId === b.id;
-            const topPx = trackIdx * 30 + 3;
+            const topPx = trackIdx * laneH + 3;
             return (
               <div
                 key={`${track.id}-${b.id}`}
-                className={`group absolute h-6 rounded transition-colors ${
+                className={`group absolute rounded transition-colors ${
                   !track.visible ? 'opacity-30' : ''
                 } ${
                   isSelected
@@ -689,7 +728,7 @@ export function Timeline() {
                       ? 'bg-accent/70 hover:bg-accent'
                       : 'bg-purple-500/60 hover:bg-purple-500'
                 }`}
-                style={{ left: `${left}%`, width: `${width}%`, top: `${topPx}px` }}
+                style={{ left: `${left}%`, width: `${width}%`, top: `${topPx}px`, height: `${laneH - 6}px` }}
                 title={b.text}
                 onPointerDown={isActive ? onDragStart({
                   type: 'block',
@@ -758,18 +797,18 @@ export function Timeline() {
             ((ov.end - ov.start) / videoDuration) * 100,
           );
           const isSelected = selectedTextOverlayId === ov.id;
-          const textLaneTop = subtitleTracks.length * 30 + 3;
+          const textLaneTop = subtitleTracks.length * laneH + 3;
           return (
             <div
               key={ov.id}
-              className={`group absolute h-6 rounded ${
+              className={`group absolute rounded ${
                 !textOverlaysVisible ? 'opacity-30' : ''
               } ${
                 isSelected
                   ? 'bg-sky-400/80 ring-1 ring-sky-200'
                   : 'bg-sky-500/60 hover:bg-sky-500'
               }`}
-              style={{ left: `${left}%`, width: `${width}%`, top: `${textLaneTop}px` }}
+              style={{ left: `${left}%`, width: `${width}%`, top: `${textLaneTop}px`, height: `${laneH - 6}px` }}
               title={ov.text}
               onPointerDown={onDragStart({
                 type: 'text',
@@ -822,18 +861,18 @@ export function Timeline() {
             ((ov.end - ov.start) / videoDuration) * 100,
           );
           const isSelected = selectedOverlayId === ov.id;
-          const imgLaneTop = subtitleTracks.length * 30 + 33;
+          const imgLaneTop = (subtitleTracks.length + 1) * laneH + 3;
           return (
             <div
               key={ov.id}
-              className={`group absolute h-6 overflow-hidden rounded ${
+              className={`group absolute overflow-hidden rounded ${
                 !imageOverlaysVisible ? 'opacity-30' : ''
               } ${
                 isSelected
                   ? 'bg-emerald-400/80 ring-1 ring-emerald-200'
                   : 'bg-emerald-500/60 hover:bg-emerald-500'
               }`}
-              style={{ left: `${left}%`, width: `${width}%`, top: `${imgLaneTop}px` }}
+              style={{ left: `${left}%`, width: `${width}%`, top: `${imgLaneTop}px`, height: `${laneH - 6}px` }}
               title={`Image overlay · ${(ov.end - ov.start).toFixed(2)}s`}
               onPointerDown={onDragStart({
                 type: 'image',
