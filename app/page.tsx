@@ -45,6 +45,7 @@ const TIMELINE_PCT_STORAGE_KEY = 'subifi:timelinePct';
 //    horizontal space to redistribute.
 
 type MobileTab = 'subs' | 'timeline' | 'style';
+type SubsSubTab = 'liste' | 'substyle';
 
 export default function Page() {
   const {
@@ -76,6 +77,7 @@ export default function Page() {
   const [timelinePct, setTimelinePct] = useState<number>(TIMELINE_PCT_DEFAULT);
   const [vSplitterDragging, setVSplitterDragging] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>('timeline');
+  const [subsSubTab, setSubsSubTab] = useState<SubsSubTab>('liste');
   const [isDesktop, setIsDesktop] = useState(false);
   // Gate persistence until the initial hydrate pass has had a chance to
   // run. Without this, the first sync render would subscribe with empty
@@ -573,15 +575,40 @@ export default function Page() {
 
               {/* Mobile tab content — unchanged */}
               <div className="min-h-0 flex-1 bg-bg md:hidden">
-                {/* Sous-titres: bars + subtitle list */}
+                {/* Sous-titres: sub-tabs Liste / Sub style */}
                 <div
                   className={clsx(
                     'flex h-full flex-col',
                     mobileTab !== 'subs' && 'hidden',
                   )}
                 >
-                  {blocks.length > 0 && (
-                    <div className="shrink-0 border-b border-border bg-bg-elev px-2 py-1" style={{ fontSize: '0.7em' }}>
+                  {/* Sub-tab bar */}
+                  <div className="flex shrink-0 border-b border-border bg-bg-elev">
+                    {(['liste', 'substyle'] as const).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setSubsSubTab(st)}
+                        className={clsx(
+                          'flex-1 px-2 py-1.5 text-xs font-medium',
+                          subsSubTab === st
+                            ? 'border-b-2 border-accent text-text'
+                            : 'text-text-muted',
+                        )}
+                      >
+                        {st === 'liste' ? 'Liste' : 'Sub style'}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Liste sub-tab */}
+                  {subsSubTab === 'liste' && (
+                    <div className="min-h-0 flex-1">
+                      <SubtitleList />
+                    </div>
+                  )}
+                  {/* Sub style sub-tab */}
+                  {subsSubTab === 'substyle' && blocks.length > 0 && (
+                    <div className="flex-1 overflow-auto bg-bg-elev px-2 py-1" style={{ fontSize: '0.7em' }}>
                       <div className="flex flex-col gap-1 origin-top-left">
                         <PresetsBar />
                         <TranslateBar />
@@ -589,9 +616,6 @@ export default function Page() {
                       </div>
                     </div>
                   )}
-                  <div className="min-h-0 flex-1">
-                    <SubtitleList />
-                  </div>
                 </div>
                 {/* Timeline tab */}
                 <div
