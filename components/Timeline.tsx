@@ -223,31 +223,29 @@ export function Timeline() {
   };
 
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    // Cmd/Ctrl + wheel → horizontal zoom centered on the cursor.
+    // Cmd/Ctrl (Win key) + wheel → ignore completely.
     if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      return;
+    }
+    // Shift + wheel → horizontal zoom centered on the cursor.
+    if (e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
       const scrollEl = scrollRef.current;
       const trackEl = trackRef.current;
       if (!scrollEl || !trackEl) return;
-      // Zoom around the cursor so the time under the mouse stays fixed.
       const rect = trackEl.getBoundingClientRect();
-      const cursorPx = e.clientX - rect.left; // in track pixels
+      const cursorPx = e.clientX - rect.left;
       const pct = rect.width > 0 ? cursorPx / rect.width : 0;
       const factor = e.deltaY > 0 ? 0.85 : 1.18;
       setZoom((z) => {
         const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z * factor));
-        // After the state commits the track gets a new width, but we can
-        // pre-compute the target scroll position now because scrollLeft is
-        // in container pixels, not track pixels. We read the new track
-        // width from the ratio (next / z) on the current rect.
         const newTrackWidth = (rect.width * next) / z;
         const cursorPxAfter = pct * newTrackWidth;
         const cursorInContainer =
           e.clientX - scrollEl.getBoundingClientRect().left;
         const targetScrollLeft = cursorPxAfter - cursorInContainer;
-        // Defer the scroll set so it runs after React has applied the new
-        // width — otherwise we'd be scrolling inside the old viewport.
         requestAnimationFrame(() => {
           scrollEl.scrollLeft = Math.max(0, targetScrollLeft);
         });
@@ -255,26 +253,16 @@ export function Timeline() {
       });
       return;
     }
-    // Shift + wheel → the legacy font-size tweak (kept as a power-user
-    // shortcut now that the StylePanel has a dedicated slider).
-    if (e.shiftKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      const step = e.deltaY > 0 ? -2 : 2;
-      const next = Math.max(10, Math.min(240, style.fontSize + step));
-      setStyle({ fontSize: next });
-      return;
-    }
-    // Plain wheel when zoomed → horizontal scroll. The scroll container
-    // handles this natively, but trackpads often fire deltaY for up/down
-    // flicks that users still expect to translate into horizontal travel.
-    if (zoom > 1 && scrollRef.current) {
+    // Plain wheel → smooth horizontal scroll. Translate deltaY into
+    // horizontal travel so a normal mouse wheel scrolls the timeline.
+    if (scrollRef.current) {
       const dominant =
         Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (dominant !== 0) {
         e.preventDefault();
         e.stopPropagation();
-        scrollRef.current.scrollLeft += dominant;
+        // Smaller multiplier for softer scrolling
+        scrollRef.current.scrollLeft += dominant * 0.5;
       }
     }
   };
@@ -544,14 +532,14 @@ export function Timeline() {
         <span>Timeline</span>
         <div className="flex items-center gap-1.5">
           {/* Zoom controls — kept compact next to the existing actions.
-              Cmd/Ctrl + wheel on the track does the same job for power users. */}
+              Shift + wheel on the track does the same job. */}
           <div className="flex items-center overflow-hidden rounded border border-border bg-bg-hi">
             <button
               type="button"
               onClick={zoomOut}
               disabled={zoom <= ZOOM_MIN}
               className="px-1.5 py-0.5 text-text-muted hover:text-text disabled:opacity-30"
-              title="Zoom out (Cmd/Ctrl + wheel)"
+              title="Zoom out (Shift + wheel)"
             >
               −
             </button>
@@ -568,7 +556,7 @@ export function Timeline() {
               onClick={zoomIn}
               disabled={zoom >= ZOOM_MAX}
               className="px-1.5 py-0.5 text-text-muted hover:text-text disabled:opacity-30"
-              title="Zoom in (Cmd/Ctrl + wheel)"
+              title="Zoom in (Shift + wheel)"
             >
               +
             </button>
@@ -670,7 +658,7 @@ export function Timeline() {
         }}
         onClick={onTrackClick}
         onWheel={onWheel}
-        title={`Click empty area to scrub · drag clip body to slide · drag edge to trim · Cmd+wheel to zoom · Shift+wheel to resize text (${style.fontSize}px)`}
+        title="Click empty area to scrub · drag clip body to slide · drag edge to trim · Shift+wheel to zoom · wheel to scroll"
       >
         {/* Audio waveform — sits at the bottom of the z-order so clip
             blocks render on top. pointer-events-none so the existing click
