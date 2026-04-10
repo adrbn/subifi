@@ -53,6 +53,8 @@ export default function Page() {
     past,
     future,
     blocks,
+    currentTime,
+    videoDuration,
   } = useEditor();
   const canUndo = past.length > 0;
   const canRedo = future.length > 0;
@@ -262,8 +264,9 @@ export default function Page() {
               </div>
             </div>
           )}
+          {/* Undo/redo — desktop only in header; mobile shows them above tabs */}
           {videoUrl && (
-            <div className="flex items-center gap-1">
+            <div className="hidden items-center gap-1 md:flex">
               <Button
                 variant="ghost"
                 size="sm"
@@ -272,21 +275,8 @@ export default function Page() {
                 title="Undo (⌘Z)"
                 aria-label="Undo"
               >
-                {/* Curved arrow pointing left */}
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="16"
-                  height="16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M9 14L4 9l5-5" />
-                  <path d="M4 9h11a5 5 0 0 1 0 10h-1" />
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-1" />
                 </svg>
               </Button>
               <Button
@@ -297,21 +287,8 @@ export default function Page() {
                 title="Redo (⇧⌘Z)"
                 aria-label="Redo"
               >
-                {/* Curved arrow pointing right — mirror of undo */}
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="16"
-                  height="16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M15 14l5-5-5-5" />
-                  <path d="M20 9H9a5 5 0 0 0 0 10h1" />
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 14l5-5-5-5" /><path d="M20 9H9a5 5 0 0 0 0 10h1" />
                 </svg>
               </Button>
             </div>
@@ -431,6 +408,59 @@ export default function Page() {
               </div>
               <div className="hidden shrink-0 border-b border-border bg-bg-elev px-3 py-1.5 sm:py-2 md:block">
                 <Timeline />
+              </div>
+
+              {/* Mobile transport bar: play/pause + time + undo/redo */}
+              <div className="flex shrink-0 items-center justify-between border-b border-border bg-bg-elev px-2 py-1 md:hidden">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const v = (window as unknown as { __previewVideo?: HTMLVideoElement }).__previewVideo;
+                      if (v) v.paused ? void v.play() : v.pause();
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded text-text hover:bg-bg-hi"
+                    aria-label="Play/Pause"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const v = (window as unknown as { __previewVideo?: HTMLVideoElement }).__previewVideo;
+                      if (v) v.currentTime = Math.max(0, v.currentTime - 5);
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:bg-bg-hi hover:text-text"
+                    aria-label="Back 5s"
+                    title="-5s"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const v = (window as unknown as { __previewVideo?: HTMLVideoElement }).__previewVideo;
+                      if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5);
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:bg-bg-hi hover:text-text"
+                    aria-label="Forward 5s"
+                    title="+5s"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" /></svg>
+                  </button>
+                  <span className="ml-1 font-mono text-xs text-text-muted">
+                    {Math.floor(currentTime / 60)}:{String(Math.floor(currentTime % 60)).padStart(2, '0')}
+                    {videoDuration > 0 && <span className="text-text-muted/50"> / {Math.floor(videoDuration / 60)}:{String(Math.floor(videoDuration % 60)).padStart(2, '0')}</span>}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" disabled={!canUndo} onClick={undo} aria-label="Undo">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-1" /></svg>
+                  </Button>
+                  <Button variant="ghost" size="sm" disabled={!canRedo} onClick={redo} aria-label="Redo">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 14l5-5-5-5" /><path d="M20 9H9a5 5 0 0 0 0 10h1" /></svg>
+                  </Button>
+                </div>
               </div>
 
               {/* Mobile tab bar — 3 tabs to save vertical space */}

@@ -599,6 +599,56 @@ export function VideoPreview() {
             </div>
           ))}
 
+        {/* Text overlays — below subtitles in z-order (matching timeline:
+            subs on top, then texts, then images at the bottom). */}
+        {(textOverlaysVisible ? textOverlays : [])
+          .filter((ov) => t >= ov.start - 0.001 && t <= ov.end + 0.001)
+          .map((ov) => (
+            <div
+              key={ov.id}
+              style={textOverlayStyle(
+                ov,
+                scale,
+                selectedTextOverlayId === ov.id,
+                draggingTextOverlayId === ov.id,
+              )}
+              onPointerDown={onTextOverlayPointerDown(ov.id)}
+              onWheel={onTextOverlayWheel(ov)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setEditingTextOverlayId(ov.id);
+                selectTextOverlay(ov.id);
+              }}
+              title="Drag to move · wheel to resize · double-click to edit text"
+            >
+              {editingTextOverlayId === ov.id ? (
+                <textarea
+                  autoFocus
+                  value={ov.text}
+                  onChange={(e) =>
+                    updateTextOverlay(ov.id, { text: e.target.value })
+                  }
+                  onBlur={() => setEditingTextOverlayId(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setEditingTextOverlayId(null);
+                    e.stopPropagation();
+                  }}
+                  rows={Math.max(1, ov.text.split('\n').length)}
+                  className="resize-none bg-transparent text-center outline-none"
+                  style={{
+                    color: 'inherit',
+                    font: 'inherit',
+                    width: '100%',
+                    minWidth: 80,
+                  }}
+                />
+              ) : (
+                ov.text
+              )}
+            </div>
+          ))}
+
+        {/* Subtitle blocks — topmost layer (matching timeline order). */}
         {currentBlocks.map((blk) => {
           const effectiveStyle = blk.styleOverride
             ? { ...style, ...blk.styleOverride }
@@ -689,55 +739,6 @@ export function VideoPreview() {
             </div>
           );
         })}
-
-        {/* Text overlays. Visible only inside their own [start,end] window
-            so they don't clutter the preview when scrubbing past them. */}
-        {(textOverlaysVisible ? textOverlays : [])
-          .filter((ov) => t >= ov.start - 0.001 && t <= ov.end + 0.001)
-          .map((ov) => (
-            <div
-              key={ov.id}
-              style={textOverlayStyle(
-                ov,
-                scale,
-                selectedTextOverlayId === ov.id,
-                draggingTextOverlayId === ov.id,
-              )}
-              onPointerDown={onTextOverlayPointerDown(ov.id)}
-              onWheel={onTextOverlayWheel(ov)}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                setEditingTextOverlayId(ov.id);
-                selectTextOverlay(ov.id);
-              }}
-              title="Drag to move · wheel to resize · double-click to edit text"
-            >
-              {editingTextOverlayId === ov.id ? (
-                <textarea
-                  autoFocus
-                  value={ov.text}
-                  onChange={(e) =>
-                    updateTextOverlay(ov.id, { text: e.target.value })
-                  }
-                  onBlur={() => setEditingTextOverlayId(null)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') setEditingTextOverlayId(null);
-                    e.stopPropagation();
-                  }}
-                  rows={Math.max(1, ov.text.split('\n').length)}
-                  className="resize-none bg-transparent text-center outline-none"
-                  style={{
-                    color: 'inherit',
-                    font: 'inherit',
-                    width: '100%',
-                    minWidth: 80,
-                  }}
-                />
-              ) : (
-                ov.text
-              )}
-            </div>
-          ))}
       </div>
     </div>
   );

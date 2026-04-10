@@ -132,9 +132,9 @@ export function Timeline() {
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 32;
   // Vertical lane height — adjustable via pinch on the labels sidebar.
-  const [laneH, setLaneH] = useState(30);
+  const [laneH, setLaneH] = useState(50);
   const LANE_H_MIN = 24;
-  const LANE_H_MAX = 80;
+  const LANE_H_MAX = 100;
   const labelsRef = useRef<HTMLDivElement>(null);
 
   // Decode the extracted audio once whenever it changes. The decode is
