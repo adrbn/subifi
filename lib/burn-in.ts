@@ -144,6 +144,7 @@ function buildOverlayComplex(
   subsFilter: string,
   effectiveWidth: number,
   videoSource: string,
+  videoDuration: number,
 ): string {
   // First step: run the subs filter on the upstream video source (either
   // [0:v] or the cut prefix's [vcut]) and emit it as [v0]. The image
@@ -158,24 +159,43 @@ function buildOverlayComplex(
         ? `,format=rgba,colorchannelmixer=aa=${alpha.toFixed(3)}`
         : ',format=rgba';
     parts.push(`[${inputIdx}:v]scale=${scaleW}:-1${alphaExpr}[img${i}]`);
-    // Center-anchored using main_w / main_h expressions so positioning
-    // matches the DOM preview exactly.
-    const x = `(main_w*${ov.positionX.toFixed(4)})-(overlay_w/2)`;
-    const y = `(main_h*${ov.positionY.toFixed(4)})-(overlay_h/2)`;
-    parts.push(`[v${i}][img${i}]overlay=${x}:${y}[v${i + 1}]`);
+
+    const posX = `(main_w*${ov.positionX.toFixed(4)})-(overlay_w/2)`;
+    const posY = `(main_h*${ov.positionY.toFixed(4)})-(overlay_h/2)`;
+
+    // Does this overlay span (nearly) the full video? If so, skip time
+    // gating — static `eval=init` positioning is cheaper.
+    const isFullDuration =
+      ov.start <= 0.1 && ov.end >= videoDuration - 0.1;
+
+    if (isFullDuration) {
+      parts.push(`[v${i}][img${i}]overlay=${posX}:${posY}[v${i + 1}]`);
+    } else {
+      // Time-gated: move the overlay far off-screen outside its active
+      // window. We use eval=frame + if() in the x/y expressions instead
+      // of enable='between(...)' because `enable` on the overlay filter
+      // causes ffmpeg-wasm 5.1.4 to hang (filter graph parses OK but no
+      // frames are produced — suspected threading/frame-request deadlock).
+      const s = ov.start.toFixed(3);
+      const e = ov.end.toFixed(3);
+      const gate = `gte(t,${s})*lte(t,${e})`;
+      const xExpr = `'if(${gate},${posX},-main_w*2)'`;
+      const yExpr = `'if(${gate},${posY},-main_h*2)'`;
+      parts.push(
+        `[v${i}][img${i}]overlay=x=${xExpr}:y=${yExpr}:eval=frame[v${i + 1}]`,
+      );
+    }
   });
   return parts.join(';');
 }
 
 // Fetch a Google Font for burning. Strategy:
 //   1. /api/font proxy → static TTF from Fontsource / Google CSS scrape.
-//      Works for most fonts and avoids woff2-in-wasm uncertainty.
-//   2. Direct WOFF2 from Google CSS (browser fetch) — fallback for
-//      variable-only fonts where /api/font can't find a static TTF.
-//      The ffmpeg-wasm freetype build CAN load woff2 if it was built
-//      with brotli support, and empirically this works for the core-mt
-//      0.12.10 build (the original burn pipeline used this path
-//      exclusively and users confirmed it worked).
+//      Works for most fonts. The freetype baked into ffmpeg-wasm does NOT
+//      include brotli so woff2 silently fails to decode — TTF is required.
+//   2. Direct WOFF2 from Google CSS (browser fetch) — last-resort fallback.
+//      May not render in the wasm freetype; kept as a heuristic for fonts
+//      where no static TTF can be sourced.
 async function fetchGoogleFontFile(
   family: string,
   weight: number,
@@ -550,12 +570,21 @@ export async function burnSubtitles(
       if (cutPrefix) filterParts.push(cutPrefix.filter);
 
       if (effectiveOverlays.length > 0) {
+        // Effective duration after cuts — needed for the full-duration
+        // optimisation in buildOverlayComplex.
+        const effectiveDuration = cutPrefix
+          ? getKeepRanges(cuts, videoDuration).reduce(
+              (sum, k) => sum + (k.end - k.start),
+              0,
+            )
+          : videoDuration;
         filterParts.push(
           buildOverlayComplex(
             effectiveOverlays,
             subsFilter,
             effectiveWidth,
             vSource,
+            effectiveDuration,
           ),
         );
       } else {
