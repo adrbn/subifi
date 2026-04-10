@@ -126,8 +126,12 @@ export function SubtitleList() {
                       e.preventDefault();
                       const ta = e.currentTarget;
                       const pos = ta.selectionStart;
-                      if (pos > 0 && pos < b.text.length) {
-                        splitBlockAt(b.id, pos);
+                      const splitPos =
+                        pos > 0 && pos < b.text.length
+                          ? pos
+                          : Math.floor(b.text.length / 2);
+                      if (splitPos > 0 && splitPos < b.text.length) {
+                        splitBlockAt(b.id, splitPos);
                       }
                     }
                   }}
