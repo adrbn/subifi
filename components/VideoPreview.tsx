@@ -251,6 +251,7 @@ export function VideoPreview() {
     setCurrentTime,
     setStyle,
     updateOverlay,
+    removeOverlay,
     selectOverlay,
     updateTextOverlay,
     selectTextOverlay,
@@ -566,21 +567,35 @@ export function VideoPreview() {
         {(imageOverlaysVisible ? overlays : [])
           .filter((ov) => t >= ov.start - 0.001 && t <= ov.end + 0.001)
           .map((ov) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            <div
               key={ov.id}
-              src={ov.dataUrl}
-              alt="overlay"
               style={imageOverlayStyle(
                 ov,
                 selectedOverlayId === ov.id,
                 draggingOverlayId === ov.id,
               )}
-              onPointerDown={onOverlayPointerDown(ov.id)}
-              onWheel={onOverlayWheel(ov)}
-              draggable={false}
-              title="Drag to move · wheel to resize"
-            />
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={ov.dataUrl}
+                alt="overlay"
+                style={{ width: '100%', height: 'auto', display: 'block' }}
+                onPointerDown={onOverlayPointerDown(ov.id)}
+                onWheel={onOverlayWheel(ov)}
+                draggable={false}
+                title="Drag to move · wheel to resize"
+              />
+              {selectedOverlayId === ov.id && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); removeOverlay(ov.id); }}
+                  className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow hover:bg-red-500"
+                  title="Remove overlay"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           ))}
 
         {currentBlocks.map((blk) => {

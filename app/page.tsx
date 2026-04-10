@@ -63,7 +63,7 @@ export default function Page() {
   const leftColRef = useRef<HTMLDivElement>(null);
   const [previewPct, setPreviewPct] = useState<number>(PREVIEW_PCT_DEFAULT);
   const [splitterDragging, setSplitterDragging] = useState(false);
-  const [mobileTab, setMobileTab] = useState<MobileTab>('subs');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('timeline');
   const [isDesktop, setIsDesktop] = useState(false);
   // Gate persistence until the initial hydrate pass has had a chance to
   // run. Without this, the first sync render would subscribe with empty
@@ -435,7 +435,7 @@ export default function Page() {
 
               {/* Mobile tab bar — 3 tabs to save vertical space */}
               <div className="flex shrink-0 items-stretch border-b border-border bg-bg-elev md:hidden">
-                {(['subs', 'timeline', 'style'] as const).map((tab) => (
+                {(['timeline', 'subs', 'style'] as const).map((tab) => (
                   <button
                     key={tab}
                     type="button"
@@ -463,12 +463,14 @@ export default function Page() {
                     mobileTab !== 'subs' && 'hidden md:flex',
                   )}
                 >
-                  {/* Bars inside tab on mobile only */}
-                  <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 md:hidden">
-                    <PresetsBar />
-                    <TranslateBar />
-                    <ExportBar />
-                  </div>
+                  {/* Bars inside tab on mobile — only when subtitles exist */}
+                  {blocks.length > 0 && (
+                    <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 md:hidden">
+                      <PresetsBar />
+                      <TranslateBar />
+                      <ExportBar />
+                    </div>
+                  )}
                   <div className="min-h-0 flex-1">
                     <SubtitleList />
                   </div>

@@ -195,59 +195,49 @@ function extForMime(mime: string): string {
 }
 
 // Build the ffmpeg filter_complex string that chains the subtitle burn with
-// N image overlays. Each overlay is a separate ffmpeg input (indices 1..N)
-// and is center-anchored using ffmpeg overlay expressions so it matches the
-// DOM preview's positioning. `effectiveWidth` is the width of the main video
-// AFTER any pre-subs downscale — it's what overlay widths must be computed
-// against so their on-screen fraction matches the preview.
+// N image overlays. Instead of separate `-i` inputs (which deadlock in
+// ffmpeg-wasm's threading model), each overlay is loaded via the `movie`
+// source filter inside the filter graph. This keeps ffmpeg at a single
+// input, sidestepping the multi-input frame-scheduling bug entirely.
 function buildOverlayComplex(
   overlays: ImageOverlay[],
+  overlayNames: string[],
   subsFilter: string,
   effectiveWidth: number,
   videoSource: string,
   videoDuration: number,
 ): string {
-  // First step: run the subs filter on the upstream video source (either
-  // [0:v] or the cut prefix's [vcut]) and emit it as [v0]. The image
-  // overlay chain then walks [v0]→[v1]→…→[vN] one overlay at a time.
   const parts: string[] = [`${videoSource}${subsFilter}[v0]`];
   overlays.forEach((ov, i) => {
-    const inputIdx = i + 1;
     const scaleW = Math.max(1, Math.round(effectiveWidth * ov.width));
     const alpha = Math.max(0, Math.min(1, ov.opacity));
     const alphaExpr =
       alpha < 0.999
         ? `,format=rgba,colorchannelmixer=aa=${alpha.toFixed(3)}`
         : ',format=rgba';
-    // `loop=-1:size=1:start=0` turns the single-frame PNG/JPG into an
-    // infinite stream. Without this, the overlay filter deadlocks in
-    // ffmpeg-wasm after consuming the one frame (eof_action=repeat is
-    // broken in the wasm threading model).
-    parts.push(`[${inputIdx}:v]loop=loop=-1:size=1:start=0,scale=${scaleW}:-1${alphaExpr}[img${i}]`);
+    // `movie` loads the image inside the filter graph (no extra -i input).
+    // `loop=0` + `setpts=N/FRAME_RATE/TB` turns the single frame into a
+    // continuous stream at the video's frame rate.
+    parts.push(
+      `movie=${overlayNames[i]}:loop=0,setpts=N/FRAME_RATE/TB,scale=${scaleW}:-1${alphaExpr}[img${i}]`,
+    );
 
     const posX = `(main_w*${ov.positionX.toFixed(4)})-(overlay_w/2)`;
     const posY = `(main_h*${ov.positionY.toFixed(4)})-(overlay_h/2)`;
 
-    // Does this overlay span (nearly) the full video? If so, skip time
-    // gating — static `eval=init` positioning is cheaper.
     const isFullDuration =
       ov.start <= 0.1 && ov.end >= videoDuration - 0.1;
 
     if (isFullDuration) {
-      parts.push(`[v${i}][img${i}]overlay=${posX}:${posY}[v${i + 1}]`);
+      parts.push(`[v${i}][img${i}]overlay=${posX}:${posY}:shortest=1[v${i + 1}]`);
     } else {
-      // Time-gated: move the overlay far off-screen outside its active
-      // window. We use eval=frame + if() in the x/y expressions instead
-      // of enable='between(...)' because `enable` on the overlay filter
-      // causes ffmpeg-wasm 5.1.4 to hang (filter graph parses OK but no
-      // frames are produced — suspected threading/frame-request deadlock).
       const s = ov.start.toFixed(3);
       const e = ov.end.toFixed(3);
       const gate = `gte(t,${s})*lte(t,${e})`;
       const xExpr = `'if(${gate},${posX},-main_w*2)'`;
       const yExpr = `'if(${gate},${posY},-main_h*2)'`;
       parts.push(
-        `[v${i}][img${i}]overlay=x=${xExpr}:y=${yExpr}:eval=frame[v${i + 1}]`,
+        `[v${i}][img${i}]overlay=x=${xExpr}:y=${yExpr}:eval=frame:shortest=1[v${i + 1}]`,
       );
     }
   });
@@ -397,13 +387,20 @@ export async function burnSubtitles(
   // knows it's still alive.
   let firstProgress = true;
   let lastProgressAt = Date.now();
-  const progressHandler = ({ progress }: { progress: number }) => {
+  const progressHandler = ({ progress, time }: { progress: number; time: number }) => {
     lastProgressAt = Date.now();
+    // ffmpeg-wasm's `progress` field is unreliable (can be negative, >1,
+    // or stuck at 0). When we know the video duration, compute progress
+    // from the `time` field (microseconds) for a smooth, accurate bar.
+    let p = progress;
+    if (videoDuration > 0 && time > 0) {
+      p = (time / 1_000_000) / videoDuration;
+    }
     if (firstProgress) {
-      console.debug('[burn] first progress event', { progress });
+      console.debug('[burn] first progress event', { progress, time, computed: p });
       firstProgress = false;
     }
-    onProgress?.(Math.max(0, Math.min(1, progress)));
+    onProgress?.(Math.max(0, Math.min(1, p)));
   };
   ff.on('progress', progressHandler);
 
@@ -647,6 +644,7 @@ export async function burnSubtitles(
         filterParts.push(
           buildOverlayComplex(
             effectiveOverlays,
+            overlayNames,
             subsFilter,
             effectiveWidth,
             vSource,
@@ -669,9 +667,9 @@ export async function burnSubtitles(
           ? `[v${effectiveOverlays.length}]`
           : '[vout]';
       const args: string[] = ['-i', inputName];
-      for (const name of overlayNames) {
-        args.push('-i', name);
-      }
+      // Image overlays are loaded via `movie` source filter inside the
+      // filter_complex — no extra `-i` inputs needed. This avoids the
+      // multi-input frame-scheduling deadlock in ffmpeg-wasm.
       args.push(
         '-filter_complex',
         fullComplex,
