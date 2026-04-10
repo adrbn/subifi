@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
+import { MediaSidebar } from '@/components/MediaSidebar';
 import type {
   ImageOverlay,
   SafeZone,
@@ -479,6 +480,12 @@ export function VideoPreview() {
         isFullscreen ? 'bg-black' : ''
       }`}
     >
+      {/* Mobile-only sidebar — positioned to the left of the video box.
+          Rendered here (inside the centering flex) so it sits adjacent to
+          the aspect-ratio container without shifting the video. */}
+      <div className="mr-1 flex flex-col items-center justify-center md:hidden">
+        <MediaSidebar />
+      </div>
       <div
         ref={containerRef}
         className="relative max-h-full max-w-full overflow-hidden rounded-xl border border-border bg-black"

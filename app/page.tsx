@@ -369,7 +369,10 @@ export default function Page() {
           >
             {videoUrl ? (
               <>
-                <MediaSidebar />
+                {/* Desktop: sidebar in normal flow to the left of preview */}
+                <div className="hidden shrink-0 md:block">
+                  <MediaSidebar />
+                </div>
                 <div className="min-w-0 flex-1">
                   <VideoPreview />
                 </div>

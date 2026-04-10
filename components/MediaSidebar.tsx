@@ -1,53 +1,20 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import clsx from 'clsx';
+import { useRef } from 'react';
 import { useEditor } from '@/lib/store';
 
-// Slim vertical sidebar sitting immediately to the left of the video
-// preview. Hosts picto-only buttons for adding media that layers on top of
-// the video (text overlays, image overlays). The bar is intentionally
-// narrow (w-8) so it doesn't eat into the preview; its height is driven
-// by the number of pictos inside, so adding new options later just makes
-// the column a bit taller without any layout surgery elsewhere.
-//
-// Mobile + landscape video special case: a vertical bar next to a 16:9
-// video on a 375px-wide phone squashes the preview to a useless thumbnail
-// (it has to fit width × 9/16 of height alongside a fixed-width column).
-// In that one combination we re-style the sidebar as a small horizontal
-// pill ABSOLUTELY positioned over the top of the video, so the preview
-// gets the full container width. The parent flex row in app/page.tsx is
-// `relative` so this absolute positioning anchors correctly.
+// Slim vertical sidebar with picto-only buttons for adding media overlays
+// (text, image). Rendered twice: once on desktop (page.tsx, normal flow to
+// the left of the preview) and once on mobile (inside VideoPreview's
+// centering flex, to the left of the video box so it doesn't shift it).
 
 export function MediaSidebar() {
   const {
     addOverlay,
     addTextOverlay,
     selectTextOverlay,
-    videoWidth,
-    videoHeight,
   } = useEditor();
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const [isMobile, setIsMobile] = useState(false);
-
-  // Track the md breakpoint (Tailwind default = 768px). Matches the same
-  // threshold app/page.tsx uses for its desktop / mobile layout switch so
-  // the two stay in sync.
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const update = () => setIsMobile(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-
-  // Landscape = wider than tall. Falls through to the "vertical adjacent"
-  // layout for square / unknown sizes since those still leave usable
-  // horizontal room next to the preview.
-  const isLandscape = videoWidth > 0 && videoHeight > 0 && videoWidth > videoHeight;
-  // On mobile: horizontal bar ABOVE the video (not overlaying it).
-  // On desktop: vertical sidebar to the left of the video.
-  const horizontal = isMobile;
 
   const onAddText = () => {
     const id = addTextOverlay();
@@ -77,14 +44,7 @@ export function MediaSidebar() {
   return (
     <div
       data-tour="media-sidebar"
-      className={clsx(
-        'rounded-md border border-border p-1',
-        horizontal
-          ? // Pinned to the left edge of the preview container via absolute
-            // positioning so it does NOT push the video off-center.
-            'absolute left-2 top-2 z-20 flex flex-col items-center gap-1 bg-bg-elev/85 backdrop-blur-sm'
-          : 'shrink-0 flex flex-col items-center gap-1 self-start bg-bg-elev',
-      )}
+      className="shrink-0 flex flex-col items-center gap-1 rounded-md border border-border bg-bg-elev p-1"
     >
       <button
         type="button"
