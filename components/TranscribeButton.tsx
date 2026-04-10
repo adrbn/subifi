@@ -29,6 +29,7 @@ export function TranscribeButton() {
   } = useEditor();
 
   const [elapsed, setElapsed] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
   const startedAtRef = useRef<number | null>(null);
 
   // Drive the elapsed timer + estimated progress while transcribing.
@@ -88,6 +89,8 @@ export function TranscribeButton() {
   }, [extractedAudio, setStatus, setProgress, setWords]);
 
   if (status !== 'audio-ready' && status !== 'transcribing') return null;
+  // Banner was dismissed — transcribe is still reachable from the subtitle tab.
+  if (dismissed && status === 'audio-ready') return null;
 
   const estTotalSec =
     videoDuration > 0 ? Math.ceil(videoDuration / REALTIME_FACTOR) : 0;
@@ -96,7 +99,7 @@ export function TranscribeButton() {
     // Stack label + CTA vertically on mobile so the long French button label
     // never clips, and give the CTA full width so it's a proper touch target.
     // Row layout is restored from sm+ where we have horizontal room.
-    <div className="flex shrink-0 flex-col items-stretch gap-2 border-y border-border bg-bg-elev px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+    <div className="relative flex shrink-0 flex-col items-stretch gap-2 border-y border-border bg-bg-elev px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       {status === 'audio-ready' ? (
         <>
           <div className="flex min-w-0 flex-col">
@@ -109,17 +112,31 @@ export function TranscribeButton() {
                 : 'Click to send the audio to Groq whisper-large-v3'}
             </div>
           </div>
-          <Button
-            variant="primary"
-            size="md"
-            className="w-full shrink-0 sm:w-auto"
-            onClick={() => void transcribe()}
-          >
-            <span className="sm:hidden">Transcrire par IA</span>
-            <span className="hidden sm:inline">
-              Transcrire automatiquement par IA
-            </span>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="md"
+              className="w-full shrink-0 sm:w-auto"
+              onClick={() => void transcribe()}
+            >
+              <span className="sm:hidden">Transcrire par IA</span>
+              <span className="hidden sm:inline">
+                Transcrire automatiquement par IA
+              </span>
+            </Button>
+            <button
+              type="button"
+              onClick={() => setDismissed(true)}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hi hover:text-text"
+              aria-label="Dismiss"
+              title="Dismiss transcription banner"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
         </>
       ) : (
         <>
@@ -152,5 +169,56 @@ export function TranscribeButton() {
         </>
       )}
     </div>
+  );
+}
+
+// Compact transcribe button for the subtitle list empty state. Triggers
+// the same transcription flow without the full banner.
+export function TranscribeInlineButton() {
+  const { extractedAudio, status, setWords, setStatus, setProgress, videoDuration } =
+    useEditor();
+
+  const transcribe = useCallback(async () => {
+    if (!extractedAudio) return;
+    setStatus('transcribing', null);
+    setProgress(0);
+    try {
+      const fd = new FormData();
+      fd.append(
+        'audio',
+        new Blob([extractedAudio as BlobPart], { type: 'audio/ogg' }),
+        'audio.ogg',
+      );
+      const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(j.error || `Transcription failed (${res.status})`);
+      }
+      const json = (await res.json()) as {
+        words: { text: string; start: number; end: number }[];
+      };
+      if (!json.words || json.words.length === 0) {
+        throw new Error(
+          'Groq returned no words (is the clip silent / music-only?)',
+        );
+      }
+      setWords(json.words);
+      setProgress(1);
+    } catch (e) {
+      console.error('[transcribe] failed', e);
+      setStatus('error', e instanceof Error ? e.message : 'Unknown error');
+    }
+  }, [extractedAudio, setStatus, setProgress, setWords]);
+
+  if (status !== 'audio-ready') return null;
+
+  return (
+    <Button
+      variant="primary"
+      size="md"
+      onClick={() => void transcribe()}
+    >
+      Transcrire par IA
+    </Button>
   );
 }

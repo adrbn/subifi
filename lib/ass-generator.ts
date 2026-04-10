@@ -111,7 +111,29 @@ export type AssGenInput = {
   videoWidth: number;
   videoHeight: number;
   textOverlays?: TextOverlay[];
+  // Map of script key → internal font family name for fallback fonts.
+  // Currently: { cjk: "Noto Sans SC" }. Used to wrap non-Latin character
+  // runs with {\fn<name>} overrides so libass picks the right font.
+  fallbackFonts?: Record<string, string>;
 };
+
+// CJK Unicode range — same regex as burn-in.ts detectNeededFallbacks().
+const CJK_RE =
+  /[\u2E80-\u9FFF\uF900-\uFAFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]+/g;
+
+// Wrap runs of CJK characters in {\fn<fallbackFont>}...{\fn<primaryFont>}
+// so libass switches to the CJK-capable font for those glyphs. Text that
+// has already been escaped by escapeAssText() is safe to wrap — the
+// override tags are injected AROUND character runs, not inside them.
+function wrapCjkRuns(
+  text: string,
+  primaryFont: string,
+  cjkFont: string,
+): string {
+  return text.replace(CJK_RE, (match) => {
+    return `{\\fn${cjkFont}}${match}{\\fn${primaryFont}}`;
+  });
+}
 
 export function generateAss({
   blocks,
@@ -119,6 +141,7 @@ export function generateAss({
   videoWidth,
   videoHeight,
   textOverlays = [],
+  fallbackFonts = {},
 }: AssGenInput): string {
   // Per-block override styles. Block i with an override gets style "B{i}"
   // built by merging the override over the global style. Blocks without
@@ -214,6 +237,11 @@ export function generateAss({
       const ls = merged.letterSpacing ?? 0;
       text = text.replace(/ /g, `{\\fsp${ls + ws}} {\\fsp${ls}}`);
     }
+    // Wrap CJK character runs with the fallback font so libass renders
+    // them with Noto Sans SC (or similar) instead of showing rectangles.
+    if (fallbackFonts.cjk) {
+      text = wrapCjkRuns(text, merged.fontFamily, fallbackFonts.cjk);
+    }
     return `Dialogue: 0,${start},${end},${styleName},,0,0,0,,${inline}${text}`;
   });
 
@@ -222,7 +250,10 @@ export function generateAss({
   const overlayEvents = textOverlays.map((t, i) => {
     const start = formatAssTimestamp(t.start);
     const end = formatAssTimestamp(t.end);
-    const text = escapeAssText(t.text);
+    let text = escapeAssText(t.text);
+    if (fallbackFonts.cjk) {
+      text = wrapCjkRuns(text, t.fontFamily, fallbackFonts.cjk);
+    }
     const tx = Math.round(t.positionX * videoWidth);
     const ty = Math.round(t.positionY * videoHeight);
     const inline = `{\\pos(${tx},${ty})}`;

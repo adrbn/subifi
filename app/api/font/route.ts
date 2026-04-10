@@ -46,18 +46,17 @@ function familyToFontsourceId(family: string): string {
 }
 
 // Try Fontsource first. Returns the TTF bytes or null on miss.
+// `subset` defaults to 'latin' but callers can request e.g.
+// 'chinese-simplified' for CJK fallback fonts.
 async function fetchFromFontsource(
   family: string,
   weight: number,
+  subset: string = 'latin',
 ): Promise<ArrayBuffer | null> {
   const id = familyToFontsourceId(family);
-  // Fontsource publishes static fonts at this CDN path. `latin` is the
-  // most universally available subset; `normal` is upright (vs italic).
-  // Variable-only fonts on Fontsource live under a `${id}:vf` package and
-  // use a different filename (`latin-wght-normal.ttf`) — we try both.
   const candidates = [
-    `https://cdn.jsdelivr.net/fontsource/fonts/${id}@latest/latin-${weight}-normal.ttf`,
-    `https://cdn.jsdelivr.net/fontsource/fonts/${id}:vf@latest/latin-wght-normal.ttf`,
+    `https://cdn.jsdelivr.net/fontsource/fonts/${id}@latest/${subset}-${weight}-normal.ttf`,
+    `https://cdn.jsdelivr.net/fontsource/fonts/${id}:vf@latest/${subset}-wght-normal.ttf`,
   ];
   for (const url of candidates) {
     try {
@@ -119,6 +118,7 @@ export async function GET(req: Request) {
   const family = searchParams.get('family')?.trim();
   const weightRaw = searchParams.get('weight')?.trim() ?? '400';
   const weight = Number(weightRaw);
+  const subset = searchParams.get('subset')?.trim() ?? 'latin';
 
   if (!family) {
     return NextResponse.json(
@@ -132,18 +132,21 @@ export async function GET(req: Request) {
       { status: 400 },
     );
   }
-  // Cap family length to avoid being used as a generic SSRF gateway. Real
-  // family names are at most ~30 chars; 80 leaves headroom for compound
-  // names like "Source Sans 3 Pro".
   if (family.length > 80) {
     return NextResponse.json(
       { error: 'family name too long' },
       { status: 400 },
     );
   }
+  if (subset.length > 40 || !/^[a-z0-9-]+$/.test(subset)) {
+    return NextResponse.json(
+      { error: 'invalid subset value' },
+      { status: 400 },
+    );
+  }
 
   // Try Fontsource (reliable static TTFs), fall back to Google CSS scrape.
-  let buf = await fetchFromFontsource(family, weight);
+  let buf = await fetchFromFontsource(family, weight, subset);
   if (!buf) {
     buf = await fetchFromGoogleCss(family, weight);
   }

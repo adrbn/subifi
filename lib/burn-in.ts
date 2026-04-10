@@ -202,6 +202,33 @@ function readFontFamilyName(buf: ArrayBuffer): string | null {
   }
 }
 
+// Detect characters outside Latin/Latin-Extended that need a fallback font
+// in the burn. Returns a list of { family, subset, weight } to fetch.
+// Currently supports CJK (Chinese/Japanese/Korean).
+const CJK_RANGE =
+  /[\u2E80-\u9FFF\uF900-\uFAFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]/;
+
+type FallbackFontSpec = {
+  family: string;
+  subset: string;
+  weight: number;
+};
+
+function detectNeededFallbacks(
+  allText: string,
+  weight: number,
+): FallbackFontSpec[] {
+  const specs: FallbackFontSpec[] = [];
+  if (CJK_RANGE.test(allText)) {
+    specs.push({
+      family: 'Noto Sans SC',
+      subset: 'chinese-simplified',
+      weight: Math.min(weight, 700), // Noto Sans SC has 100-900
+    });
+  }
+  return specs;
+}
+
 function extForMime(mime: string): string {
   if (mime.includes('png')) return 'png';
   if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
@@ -309,10 +336,12 @@ function buildOverlayComplex(
 async function fetchGoogleFontFile(
   family: string,
   weight: number,
+  subset?: string,
 ): Promise<{ name: string; buffer: ArrayBuffer } | null> {
   const safe = family.replace(/[^A-Za-z0-9]+/g, '_');
   try {
-    const url = `/api/font?family=${encodeURIComponent(family)}&weight=${weight}`;
+    let url = `/api/font?family=${encodeURIComponent(family)}&weight=${weight}`;
+    if (subset) url += `&subset=${encodeURIComponent(subset)}`;
     const res = await fetch(url);
     if (res.ok) {
       const buffer = await res.arrayBuffer();
@@ -625,6 +654,44 @@ async function burnSubtitlesCore(
         fontsWritten++;
       }
     }
+    // CJK / non-Latin fallback fonts. Scan ALL text (subtitles + overlays)
+    // for characters the main font can't render (e.g. Chinese, Japanese,
+    // Korean). For each detected script, fetch a known-good fallback font
+    // (e.g. Noto Sans SC for CJK) with the appropriate subset.
+    const allText =
+      effectiveBlocks.map((b) => b.text).join('') +
+      effectiveTextOverlays.map((t) => t.text).join('');
+    const fallbackSpecs = detectNeededFallbacks(allText, style.fontWeight);
+    // Maps script regex → internal font family name so generateAss can
+    // wrap character runs with {\fn<name>} overrides.
+    const fallbackFonts = new Map<string, string>();
+    for (const spec of fallbackSpecs) {
+      const key = `${spec.family}@${spec.weight}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const f = await fetchGoogleFontFile(spec.family, spec.weight, spec.subset);
+      if (f) {
+        const internal = readFontFamilyName(f.buffer);
+        const resolvedName = internal ?? spec.family;
+        if (internal) fontNameMap.set(spec.family, internal);
+        await ff.writeFile(
+          `${fontsDir}/${f.name}`,
+          cloneBytesForFFmpeg(f.buffer),
+        );
+        fontsWritten++;
+        // CJK_RANGE is the only script we currently detect — map it.
+        if (spec.subset === 'chinese-simplified') {
+          fallbackFonts.set('cjk', resolvedName);
+        }
+        console.debug(`[burn] fallback font "${spec.family}" → "${resolvedName}" (${spec.subset})`);
+      } else {
+        console.warn(
+          `[burn] could not fetch fallback font "${spec.family}" (${spec.subset}) — ` +
+            `characters in this range will show as rectangles`,
+        );
+      }
+    }
+
     console.debug('[burn] fonts written to fontsdir', { fontsWritten, fontNameMap: Object.fromEntries(fontNameMap) });
     if (fontsWritten === 0) {
       throw new Error(
@@ -645,6 +712,7 @@ async function burnSubtitlesCore(
         ...t,
         fontFamily: remap(t.fontFamily),
       })),
+      fallbackFonts: Object.fromEntries(fallbackFonts),
     });
     const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
     console.debug('[burn] ass file generated', {

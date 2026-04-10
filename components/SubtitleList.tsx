@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { Button } from './ui/button';
+import { TranscribeInlineButton } from './TranscribeButton';
 import clsx from 'clsx';
 
 function fmt(seconds: number): string {
@@ -84,8 +85,9 @@ export function SubtitleList() {
     else if (status === 'ready')
       label = 'Transcription returned no words. Try a different clip?';
     return (
-      <div className="flex h-full w-full items-center justify-center text-sm text-text-muted">
-        {label}
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-4 text-center text-sm text-text-muted">
+        <span>{label}</span>
+        <TranscribeInlineButton />
       </div>
     );
   }

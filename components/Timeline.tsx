@@ -359,6 +359,22 @@ export function Timeline() {
   const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, z / 2));
   const zoomReset = () => setZoom(1);
 
+  // While a layer drag is active, prevent the scroll container from
+  // interpreting touch moves as horizontal scrolling. Without this, dragging
+  // a handle on mobile starts scrolling the timeline after ~2cm of movement.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !drag) return;
+    const prevOverflow = el.style.overflowX;
+    const prevTouch = el.style.touchAction;
+    el.style.overflowX = 'hidden';
+    el.style.touchAction = 'none';
+    return () => {
+      el.style.overflowX = prevOverflow;
+      el.style.touchAction = prevTouch;
+    };
+  }, [drag]);
+
   // Generic drag handler — we resolve the right update path inside `move`
   // based on `target`, so trim handles and body drag share the same code.
   const onDragStart = useCallback(
@@ -716,7 +732,7 @@ export function Timeline() {
                       ? 'bg-accent/70 hover:bg-accent'
                       : 'bg-purple-500/60 hover:bg-purple-500'
                 }`}
-                style={{ left: `${left}%`, width: `${width}%`, top: `${topPx}px`, height: `${laneH - 6}px` }}
+                style={{ left: `${left}%`, width: `${width}%`, top: `${topPx}px`, height: `${laneH - 6}px`, touchAction: 'none' }}
                 title={b.text}
                 onPointerDown={isActive ? onDragStart({
                   type: 'block',
@@ -742,7 +758,7 @@ export function Timeline() {
                   <>
                     <div
                       className="absolute top-0 left-0 h-full cursor-ew-resize rounded-l bg-white/30 hover:bg-white/70"
-                      style={{ width: HANDLE_PX }}
+                      style={{ width: HANDLE_PX, touchAction: 'none' }}
                       onPointerDown={onDragStart({
                         type: 'block',
                         id: b.id,
@@ -751,7 +767,7 @@ export function Timeline() {
                     />
                     <div
                       className="absolute top-0 right-0 h-full cursor-ew-resize rounded-r bg-white/30 hover:bg-white/70"
-                      style={{ width: HANDLE_PX }}
+                      style={{ width: HANDLE_PX, touchAction: 'none' }}
                       onPointerDown={onDragStart({
                         type: 'block',
                         id: b.id,
@@ -796,7 +812,7 @@ export function Timeline() {
                   ? 'bg-sky-400/80 ring-1 ring-sky-200'
                   : 'bg-sky-500/60 hover:bg-sky-500'
               }`}
-              style={{ left: `${left}%`, width: `${width}%`, top: `${textLaneTop}px`, height: `${laneH - 6}px` }}
+              style={{ left: `${left}%`, width: `${width}%`, top: `${textLaneTop}px`, height: `${laneH - 6}px`, touchAction: 'none' }}
               title={ov.text}
               onPointerDown={onDragStart({
                 type: 'text',
@@ -809,7 +825,7 @@ export function Timeline() {
               </div>
               <div
                 className="absolute top-0 left-0 h-full cursor-ew-resize rounded-l bg-white/30 hover:bg-white/70"
-                style={{ width: HANDLE_PX }}
+                style={{ width: HANDLE_PX, touchAction: 'none' }}
                 onPointerDown={onDragStart({
                   type: 'text',
                   id: ov.id,
@@ -818,7 +834,7 @@ export function Timeline() {
               />
               <div
                 className="absolute top-0 right-0 h-full cursor-ew-resize rounded-r bg-white/30 hover:bg-white/70"
-                style={{ width: HANDLE_PX }}
+                style={{ width: HANDLE_PX, touchAction: 'none' }}
                 onPointerDown={onDragStart({
                   type: 'text',
                   id: ov.id,
@@ -860,7 +876,7 @@ export function Timeline() {
                   ? 'bg-emerald-400/80 ring-1 ring-emerald-200'
                   : 'bg-emerald-500/60 hover:bg-emerald-500'
               }`}
-              style={{ left: `${left}%`, width: `${width}%`, top: `${imgLaneTop}px`, height: `${laneH - 6}px` }}
+              style={{ left: `${left}%`, width: `${width}%`, top: `${imgLaneTop}px`, height: `${laneH - 6}px`, touchAction: 'none' }}
               title={`Image overlay · ${(ov.end - ov.start).toFixed(2)}s`}
               onPointerDown={onDragStart({
                 type: 'image',
@@ -878,7 +894,7 @@ export function Timeline() {
               />
               <div
                 className="absolute top-0 left-0 h-full cursor-ew-resize rounded-l bg-white/30 hover:bg-white/70"
-                style={{ width: HANDLE_PX }}
+                style={{ width: HANDLE_PX, touchAction: 'none' }}
                 onPointerDown={onDragStart({
                   type: 'image',
                   id: ov.id,
@@ -887,7 +903,7 @@ export function Timeline() {
               />
               <div
                 className="absolute top-0 right-0 h-full cursor-ew-resize rounded-r bg-white/30 hover:bg-white/70"
-                style={{ width: HANDLE_PX }}
+                style={{ width: HANDLE_PX, touchAction: 'none' }}
                 onPointerDown={onDragStart({
                   type: 'image',
                   id: ov.id,
@@ -926,10 +942,9 @@ export function Timeline() {
               style={{
                 left: `${left}%`,
                 width: `${width}%`,
-                // Diagonal hatching makes it obvious this isn't a clip but
-                // a removed region — distinct from the solid subtitle blocks.
                 backgroundImage:
                   'repeating-linear-gradient(45deg, rgba(248,113,113,0.12) 0 6px, transparent 6px 12px)',
+                touchAction: 'none',
               }}
               title={`Cut · ${(c.end - c.start).toFixed(2)}s removed at export`}
               onPointerDown={onDragStart({
@@ -941,7 +956,7 @@ export function Timeline() {
               {/* Trim handles */}
               <div
                 className="absolute top-0 left-0 h-full cursor-ew-resize bg-red-400/40 hover:bg-red-400/80"
-                style={{ width: HANDLE_PX }}
+                style={{ width: HANDLE_PX, touchAction: 'none' }}
                 onPointerDown={onDragStart({
                   type: 'cut',
                   id: c.id,
@@ -950,7 +965,7 @@ export function Timeline() {
               />
               <div
                 className="absolute top-0 right-0 h-full cursor-ew-resize bg-red-400/40 hover:bg-red-400/80"
-                style={{ width: HANDLE_PX }}
+                style={{ width: HANDLE_PX, touchAction: 'none' }}
                 onPointerDown={onDragStart({
                   type: 'cut',
                   id: c.id,
