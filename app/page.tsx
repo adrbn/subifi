@@ -431,7 +431,43 @@ export default function Page() {
                 </div>
               </>
             ) : (
-              <Dropzone />
+              <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-4">
+                {/* Hero */}
+                <div className="flex flex-col items-center gap-2 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-2xl font-bold text-white">
+                    S
+                  </div>
+                  <h1 className="text-2xl font-bold tracking-tight text-text sm:text-3xl">
+                    SubIFI
+                  </h1>
+                  <p className="max-w-md text-sm text-text-muted">
+                    Transcribe, edit, and style subtitles. Export as SRT, VTT,
+                    or a burned-in MP4 — all in your browser.
+                  </p>
+                </div>
+                {/* Dropzone */}
+                <div className="w-full max-w-lg">
+                  <Dropzone />
+                </div>
+                {/* Feature pills */}
+                <div className="flex flex-wrap justify-center gap-2 text-[11px] text-text-muted">
+                  {[
+                    'Auto-transcribe (Groq)',
+                    'Karaoke mode',
+                    'Custom fonts',
+                    'Image & text overlays',
+                    'Cut & trim',
+                    'Export MP4 / SRT / VTT',
+                  ].map((f) => (
+                    <span
+                      key={f}
+                      className="rounded-full border border-border px-2.5 py-1"
+                    >
+                      {f}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 
