@@ -299,6 +299,8 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       ],
       activeTrackId: DEFAULT_TRACK_ID,
       selectedBlockId: null,
+      overlays: [],
+      selectedOverlayId: null,
       textOverlays: [],
       selectedTextOverlayId: null,
       cuts: [],
