@@ -30,6 +30,12 @@ const PREVIEW_PCT_MAX = 85;
 const PREVIEW_PCT_DEFAULT = 62;
 const PREVIEW_PCT_STORAGE_KEY = 'subifi:previewPct';
 
+// Vertical splitter: timeline (left) vs subtitle list (right).
+const TIMELINE_PCT_MIN = 25;
+const TIMELINE_PCT_MAX = 80;
+const TIMELINE_PCT_DEFAULT = 55;
+const TIMELINE_PCT_STORAGE_KEY = 'subifi:timelinePct';
+
 // Main page. Two layouts share the same data:
 //  - Desktop (md+): hybrid — preview + timeline + subtitle list on the left
 //    column, StylePanel on the right as a fixed sidebar.
@@ -64,8 +70,11 @@ export default function Page() {
   const tourReady = Boolean(videoUrl) && blocks.length > 0;
 
   const leftColRef = useRef<HTMLDivElement>(null);
+  const bottomRowRef = useRef<HTMLDivElement>(null);
   const [previewPct, setPreviewPct] = useState<number>(PREVIEW_PCT_DEFAULT);
   const [splitterDragging, setSplitterDragging] = useState(false);
+  const [timelinePct, setTimelinePct] = useState<number>(TIMELINE_PCT_DEFAULT);
+  const [vSplitterDragging, setVSplitterDragging] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>('timeline');
   const [isDesktop, setIsDesktop] = useState(false);
   // Gate persistence until the initial hydrate pass has had a chance to
@@ -84,7 +93,7 @@ export default function Page() {
     return () => mq.removeEventListener('change', update);
   }, []);
 
-  // Restore preview height from localStorage once on mount.
+  // Restore preview height + timeline width from localStorage once on mount.
   useEffect(() => {
     try {
       const raw = localStorage.getItem(PREVIEW_PCT_STORAGE_KEY);
@@ -92,6 +101,13 @@ export default function Page() {
         const n = Number(raw);
         if (!Number.isNaN(n)) {
           setPreviewPct(Math.max(PREVIEW_PCT_MIN, Math.min(PREVIEW_PCT_MAX, n)));
+        }
+      }
+      const rawT = localStorage.getItem(TIMELINE_PCT_STORAGE_KEY);
+      if (rawT) {
+        const n = Number(rawT);
+        if (!Number.isNaN(n)) {
+          setTimelinePct(Math.max(TIMELINE_PCT_MIN, Math.min(TIMELINE_PCT_MAX, n)));
         }
       }
     } catch {
@@ -107,6 +123,15 @@ export default function Page() {
       // ignore
     }
   }, [previewPct]);
+
+  // Persist timeline width.
+  useEffect(() => {
+    try {
+      localStorage.setItem(TIMELINE_PCT_STORAGE_KEY, String(timelinePct));
+    } catch {
+      // ignore
+    }
+  }, [timelinePct]);
 
   // --- Session auto-save / auto-restore ------------------------------------
   // On mount, try to rehydrate from the last saved IndexedDB snapshot. This
@@ -231,6 +256,32 @@ export default function Page() {
       };
       const up = () => {
         setSplitterDragging(false);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    },
+    [],
+  );
+
+  const onVSplitterPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!bottomRowRef.current) return;
+      e.preventDefault();
+      setVSplitterDragging(true);
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+      const move = (ev: PointerEvent) => {
+        if (!bottomRowRef.current) return;
+        const rect = bottomRowRef.current.getBoundingClientRect();
+        const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+        setTimelinePct(
+          Math.max(TIMELINE_PCT_MIN, Math.min(TIMELINE_PCT_MAX, pct)),
+        );
+      };
+      const up = () => {
+        setVSplitterDragging(false);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
       };
@@ -404,14 +455,11 @@ export default function Page() {
               {/* Transcribe gate — shown when audio is ready but blocks are empty */}
               <TranscribeButton />
 
-              {/* Desktop: bars + timeline always visible above subtitle list */}
+              {/* Desktop: bars above the timeline+subs row */}
               <div className="hidden shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 sm:gap-2 sm:py-2 md:flex">
                 <PresetsBar />
                 <TranslateBar />
                 <ExportBar />
-              </div>
-              <div className="hidden shrink-0 border-b border-border bg-bg-elev px-3 py-1.5 sm:py-2 md:block">
-                <Timeline />
               </div>
 
               {/* Mobile transport bar: play/pause + time + undo/redo */}
@@ -488,18 +536,52 @@ export default function Page() {
                 ))}
               </div>
 
-              {/* Tab content — desktop always shows SubtitleList, mobile swaps */}
-              <div className="min-h-0 flex-1 bg-bg">
+              {/* Desktop: timeline (left) + subtitle list (right) with
+                  a draggable vertical splitter between them. */}
+              <div
+                ref={bottomRowRef}
+                className="hidden min-h-0 flex-1 md:flex"
+              >
+                {/* Timeline pane */}
+                <div
+                  className="min-h-0 min-w-0 overflow-auto border-r border-border bg-bg-elev px-3 py-2"
+                  style={{ width: `${timelinePct}%`, flex: 'none' }}
+                >
+                  <Timeline />
+                </div>
+                {/* Vertical splitter */}
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize timeline / subtitles"
+                  onPointerDown={onVSplitterPointerDown}
+                  onDoubleClick={() => setTimelinePct(TIMELINE_PCT_DEFAULT)}
+                  className={clsx(
+                    'group hidden shrink-0 cursor-col-resize border-x border-border bg-bg-elev transition-colors md:block',
+                    vSplitterDragging ? 'bg-accent/30' : 'hover:bg-bg-hi',
+                  )}
+                  style={{ width: 6, touchAction: 'none' }}
+                  title="Drag to resize — double-click to reset"
+                >
+                  <div className="mx-auto h-10 w-full rounded bg-border group-hover:bg-border-hi" style={{ marginTop: '50%' }} />
+                </div>
+                {/* Subtitle list pane */}
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto bg-bg">
+                  <SubtitleList />
+                </div>
+              </div>
+
+              {/* Mobile tab content — unchanged */}
+              <div className="min-h-0 flex-1 bg-bg md:hidden">
                 {/* Sous-titres: bars + subtitle list */}
                 <div
                   className={clsx(
                     'flex h-full flex-col',
-                    mobileTab !== 'subs' && 'hidden md:flex',
+                    mobileTab !== 'subs' && 'hidden',
                   )}
                 >
-                  {/* Bars inside tab on mobile — only when subtitles exist */}
                   {blocks.length > 0 && (
-                    <div className="shrink-0 border-b border-border bg-bg-elev px-2 py-1 md:hidden" style={{ fontSize: '0.7em' }}>
+                    <div className="shrink-0 border-b border-border bg-bg-elev px-2 py-1" style={{ fontSize: '0.7em' }}>
                       <div className="flex flex-col gap-1 origin-top-left">
                         <PresetsBar />
                         <TranslateBar />
@@ -511,19 +593,19 @@ export default function Page() {
                     <SubtitleList />
                   </div>
                 </div>
-                {/* Timeline tab — mobile only */}
+                {/* Timeline tab */}
                 <div
                   className={clsx(
-                    'flex h-full flex-col overflow-hidden bg-bg-elev px-3 py-2 md:hidden',
+                    'flex h-full flex-col overflow-hidden bg-bg-elev px-3 py-2',
                     mobileTab !== 'timeline' && 'hidden',
                   )}
                 >
                   <Timeline />
                 </div>
-                {/* Style tab — mobile only */}
+                {/* Style tab */}
                 <div
                   className={clsx(
-                    'h-full md:hidden',
+                    'h-full',
                     mobileTab !== 'style' && 'hidden',
                   )}
                 >
