@@ -295,6 +295,41 @@ export function Timeline() {
     }
   }, [currentTime, zoom, videoDuration]);
 
+  // Pinch-to-zoom on the timeline track. We attach native touch listeners
+  // with { passive: false } so we can preventDefault the browser's default
+  // pinch-zoom while handling it ourselves.
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const dist = (a: Touch, b: Touch) =>
+      Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        pinchRef.current = { dist: dist(e.touches[0], e.touches[1]), zoom };
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !pinchRef.current) return;
+      e.preventDefault();
+      const d = dist(e.touches[0], e.touches[1]);
+      const scale = d / pinchRef.current.dist;
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pinchRef.current.zoom * scale));
+      setZoom(next);
+    };
+    const onEnd = () => { pinchRef.current = null; };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, [zoom]);
+
   const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, z * 2));
   const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, z / 2));
   const zoomReset = () => setZoom(1);

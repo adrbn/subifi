@@ -498,6 +498,7 @@ export function VideoPreview() {
           src={videoUrl}
           className="h-full w-full"
           controls
+          playsInline
           // Ask the browser to hide the native fullscreen button from the
           // built-in controls so users go through our custom toggle, which
           // fullscreens the whole wrapper (video + overlays) instead of
