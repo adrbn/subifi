@@ -671,6 +671,10 @@ export function Timeline() {
           minWidth: '100%',
           minHeight: `${(subtitleTracks.length + 3) * laneH}px`,
           height: '100%',
+          // Prevent vertical page scroll when touching the timeline. pan-x
+          // allows horizontal scroll (for timeline panning) but blocks the
+          // vertical swipe that was interfering on mobile.
+          touchAction: drag ? 'none' : 'pan-x',
         }}
         onClick={onTrackClick}
         onWheel={onWheel}

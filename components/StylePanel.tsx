@@ -8,8 +8,10 @@ import { Slider } from './ui/slider';
 import { Select } from './ui/select';
 import { Button } from './ui/button';
 
-// Right-side panel: all style knobs. Every change is immediately reflected
-// in the VideoPreview because both read from the same Zustand store.
+// Right-side panel: all style knobs. When a text overlay is selected the
+// controls edit that overlay's properties; otherwise they edit the global
+// subtitle style. Every change is immediately reflected in the VideoPreview
+// because both read from the same Zustand store.
 
 function ColorField({
   label,
@@ -35,11 +37,6 @@ function ColorField({
   );
 }
 
-// Aspect-ratio buckets used to gate which dead-zone presets make sense for
-// the current video. We're loose on the boundaries because real footage
-// rarely matches a "perfect" 9:16 — anything taller than ~1.05× wide is
-// portrait, anything wider than ~1.05× tall is landscape, and the rest is
-// effectively square.
 type AspectBucket = 'portrait' | 'landscape' | 'square';
 
 function bucketForAspect(w: number, h: number): AspectBucket {
@@ -91,24 +88,124 @@ export function StylePanel() {
     });
   };
 
+  // Find the currently selected text overlay (if any).
+  const selectedText = selectedTextOverlayId
+    ? textOverlays.find((t) => t.id === selectedTextOverlayId)
+    : null;
+
+  // When a text overlay is selected, the main style controls edit it.
+  const isTextMode = !!selectedText;
+
+  // Helpers to read/write the active style target.
+  const val = {
+    fontFamily: isTextMode ? selectedText!.fontFamily : style.fontFamily,
+    fontSize: isTextMode ? selectedText!.fontSize : style.fontSize,
+    fontWeight: isTextMode ? selectedText!.fontWeight : style.fontWeight,
+    italic: isTextMode ? selectedText!.italic : style.italic,
+    textAlign: isTextMode ? selectedText!.textAlign : style.textAlign,
+    textColor: isTextMode ? selectedText!.textColor : style.textColor,
+    textOutlineColor: isTextMode ? selectedText!.textOutlineColor : style.textOutlineColor,
+    textOutlineWidth: isTextMode ? selectedText!.textOutlineWidth : style.textOutlineWidth,
+    backgroundColor: isTextMode ? selectedText!.backgroundColor : style.backgroundColor,
+    backgroundOpacity: isTextMode ? selectedText!.backgroundOpacity : style.backgroundOpacity,
+    backgroundPaddingX: isTextMode ? selectedText!.backgroundPaddingX : style.backgroundPaddingX,
+    backgroundPaddingY: isTextMode ? selectedText!.backgroundPaddingY : style.backgroundPaddingY,
+    backgroundRadius: isTextMode ? selectedText!.backgroundRadius : style.backgroundRadius,
+    positionX: isTextMode ? selectedText!.positionX : style.positionX,
+    positionY: isTextMode ? selectedText!.positionY : style.positionY,
+    maxWidth: isTextMode ? selectedText!.maxWidth : style.maxWidth,
+  };
+
+  const set = (patch: Record<string, unknown>) => {
+    if (isTextMode) {
+      updateTextOverlay(selectedText!.id, patch);
+    } else {
+      setStyle(patch);
+    }
+  };
+
   return (
     <div
       data-tour="style-panel"
       className="flex h-full flex-col gap-4 overflow-y-auto px-3 py-3"
     >
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
-        Style
-      </h3>
+      {/* Mode indicator */}
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+          {isTextMode ? 'Text layer style' : 'Subtitle style'}
+        </h3>
+        {isTextMode && (
+          <button
+            type="button"
+            onClick={() => selectTextOverlay(null)}
+            className="text-[10px] text-text-muted hover:text-text"
+          >
+            Back to subs
+          </button>
+        )}
+      </div>
 
-      <FontPicker />
+      {/* Text content + timing — only shown in text overlay mode */}
+      {isTextMode && (
+        <>
+          <textarea
+            value={selectedText!.text}
+            onChange={(e) =>
+              updateTextOverlay(selectedText!.id, { text: e.target.value })
+            }
+            rows={Math.max(1, selectedText!.text.split('\n').length)}
+            className="w-full resize-none rounded bg-bg-hi px-1.5 py-1 text-xs text-text outline-none"
+          />
+          <div className="flex items-center gap-2 text-[10px] text-text-muted">
+            <label className="flex items-center gap-1">
+              <span>start</span>
+              <input
+                type="number"
+                step={0.05}
+                value={selectedText!.start.toFixed(2)}
+                onChange={(e) =>
+                  updateTextOverlay(selectedText!.id, {
+                    start: Number(e.target.value),
+                  })
+                }
+                className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono"
+              />
+            </label>
+            <label className="flex items-center gap-1">
+              <span>end</span>
+              <input
+                type="number"
+                step={0.05}
+                value={selectedText!.end.toFixed(2)}
+                onChange={(e) =>
+                  updateTextOverlay(selectedText!.id, {
+                    end: Number(e.target.value),
+                  })
+                }
+                className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono"
+              />
+            </label>
+          </div>
+        </>
+      )}
+
+      <FontPicker
+        compact={isTextMode}
+        value={
+          isTextMode
+            ? { family: selectedText!.fontFamily, weight: selectedText!.fontWeight }
+            : undefined
+        }
+        onChange={(family) => set({ fontFamily: family })}
+      />
 
       <Slider
         label="Font size"
-        min={16}
-        max={120}
-        value={style.fontSize}
+        min={isTextMode ? 12 : 16}
+        max={isTextMode ? 200 : 120}
+        value={val.fontSize}
         unit="px"
-        onChange={(v) => setStyle({ fontSize: v })}
+        onChange={(v) => set({ fontSize: v })}
       />
 
       <Slider
@@ -116,16 +213,16 @@ export function StylePanel() {
         min={100}
         max={900}
         step={100}
-        value={style.fontWeight}
-        onChange={(v) => setStyle({ fontWeight: v })}
+        value={val.fontWeight}
+        onChange={(v) => set({ fontWeight: v })}
       />
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-text-muted">Italic</span>
         <input
           type="checkbox"
-          checked={style.italic}
-          onChange={(e) => setStyle({ italic: e.target.checked })}
+          checked={val.italic}
+          onChange={(e) => set({ italic: e.target.checked })}
         />
       </div>
 
@@ -133,9 +230,9 @@ export function StylePanel() {
         <span className="text-xs text-text-muted">Text align</span>
         <Select
           className="w-28"
-          value={style.textAlign}
+          value={val.textAlign}
           onChange={(e) =>
-            setStyle({ textAlign: e.target.value as 'left' | 'center' | 'right' })
+            set({ textAlign: e.target.value as 'left' | 'center' | 'right' })
           }
         >
           <option value="left">Left</option>
@@ -144,114 +241,118 @@ export function StylePanel() {
         </Select>
       </div>
 
-      <Slider
-        label="Line height"
-        min={80}
-        max={220}
-        step={5}
-        // Stored as a multiplier (1.0..2.2), shown as a percentage so the
-        // slider feels like the rest of the panel.
-        value={Math.round((style.lineHeight ?? 1.2) * 100)}
-        unit="%"
-        onChange={(v) => setStyle({ lineHeight: v / 100 })}
-      />
-      <Slider
-        label="Letter spacing"
-        min={-5}
-        max={20}
-        value={style.letterSpacing ?? 0}
-        unit="px"
-        onChange={(v) => setStyle({ letterSpacing: v })}
-      />
-      <Slider
-        label="Word spacing"
-        min={-5}
-        max={30}
-        value={style.wordSpacing ?? 0}
-        unit="px"
-        onChange={(v) => setStyle({ wordSpacing: v })}
-      />
+      {/* Line height / letter / word spacing — subtitle-only for now */}
+      {!isTextMode && (
+        <>
+          <Slider
+            label="Line height"
+            min={80}
+            max={220}
+            step={5}
+            value={Math.round((style.lineHeight ?? 1.2) * 100)}
+            unit="%"
+            onChange={(v) => setStyle({ lineHeight: v / 100 })}
+          />
+          <Slider
+            label="Letter spacing"
+            min={-5}
+            max={20}
+            value={style.letterSpacing ?? 0}
+            unit="px"
+            onChange={(v) => setStyle({ letterSpacing: v })}
+          />
+          <Slider
+            label="Word spacing"
+            min={-5}
+            max={30}
+            value={style.wordSpacing ?? 0}
+            unit="px"
+            onChange={(v) => setStyle({ wordSpacing: v })}
+          />
+        </>
+      )}
 
-      <hr className="border-border" />
-
-      {/* Karaoke / word-pop. Requires per-word timings (block.words) which
-          come from Whisper by default — when off, blocks render as one
-          uniform string and karaokeBaseColor is ignored. */}
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-text-muted">Karaoke (word-pop)</span>
-        <input
-          type="checkbox"
-          checked={style.karaoke}
-          onChange={(e) => setStyle({ karaoke: e.target.checked })}
-        />
-      </div>
-      {style.karaoke && (
-        <ColorField
-          label="Unspoken color"
-          value={style.karaokeBaseColor}
-          onChange={(v) => setStyle({ karaokeBaseColor: v })}
-        />
+      {/* Karaoke — subtitle-only */}
+      {!isTextMode && (
+        <>
+          <hr className="border-border" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-muted">Karaoke (word-pop)</span>
+            <input
+              type="checkbox"
+              checked={style.karaoke}
+              onChange={(e) => setStyle({ karaoke: e.target.checked })}
+            />
+          </div>
+          {style.karaoke && (
+            <ColorField
+              label="Unspoken color"
+              value={style.karaokeBaseColor}
+              onChange={(v) => setStyle({ karaokeBaseColor: v })}
+            />
+          )}
+        </>
       )}
 
       <hr className="border-border" />
 
       <ColorField
         label="Text color"
-        value={style.textColor}
-        onChange={(v) => setStyle({ textColor: v })}
+        value={val.textColor}
+        onChange={(v) => set({ textColor: v })}
       />
       <ColorField
         label="Outline color"
-        value={style.textOutlineColor}
-        onChange={(v) => setStyle({ textOutlineColor: v })}
+        value={val.textOutlineColor}
+        onChange={(v) => set({ textOutlineColor: v })}
       />
       <Slider
         label="Outline width"
         min={0}
         max={10}
-        value={style.textOutlineWidth}
+        value={val.textOutlineWidth}
         unit="px"
-        onChange={(v) => setStyle({ textOutlineWidth: v })}
+        onChange={(v) => set({ textOutlineWidth: v })}
       />
 
       <hr className="border-border" />
 
       <ColorField
         label="Background"
-        value={style.backgroundColor}
-        onChange={(v) => setStyle({ backgroundColor: v })}
+        value={val.backgroundColor}
+        onChange={(v) => set({ backgroundColor: v })}
       />
       <Slider
         label="Background opacity"
         min={0}
         max={100}
-        value={Math.round(style.backgroundOpacity * 100)}
+        value={Math.round(val.backgroundOpacity * 100)}
         unit="%"
-        onChange={(v) => setStyle({ backgroundOpacity: v / 100 })}
+        onChange={(v) => set({ backgroundOpacity: v / 100 })}
       />
       <Slider
         label="Padding X"
         min={0}
         max={80}
-        value={style.backgroundPaddingX}
+        value={val.backgroundPaddingX}
         unit="px"
-        onChange={(v) => setStyle({ backgroundPaddingX: v })}
+        onChange={(v) => set({ backgroundPaddingX: v })}
       />
       <Slider
         label="Padding Y"
         min={0}
         max={80}
-        value={style.backgroundPaddingY}
+        value={val.backgroundPaddingY}
         unit="px"
-        onChange={(v) => setStyle({ backgroundPaddingY: v })}
+        onChange={(v) => set({ backgroundPaddingY: v })}
       />
       <Slider
         label="Corner radius"
         min={0}
         max={60}
-        value={style.backgroundRadius}
+        value={val.backgroundRadius}
         unit="px"
-        onChange={(v) => setStyle({ backgroundRadius: v })}
+        onChange={(v) => set({ backgroundRadius: v })}
       />
 
       <hr className="border-border" />
@@ -260,30 +361,30 @@ export function StylePanel() {
         label="Position X"
         min={0}
         max={100}
-        value={Math.round(style.positionX * 100)}
+        value={Math.round(val.positionX * 100)}
         unit="%"
-        onChange={(v) => setStyle({ positionX: v / 100 })}
+        onChange={(v) => set({ positionX: v / 100 })}
       />
       <Slider
         label="Position Y"
         min={0}
         max={100}
-        value={Math.round(style.positionY * 100)}
+        value={Math.round(val.positionY * 100)}
         unit="%"
-        onChange={(v) => setStyle({ positionY: v / 100 })}
+        onChange={(v) => set({ positionY: v / 100 })}
       />
       <Slider
         label="Max width"
         min={10}
         max={100}
-        value={Math.round(style.maxWidth * 100)}
+        value={Math.round(val.maxWidth * 100)}
         unit="%"
-        onChange={(v) => setStyle({ maxWidth: v / 100 })}
+        onChange={(v) => set({ maxWidth: v / 100 })}
       />
 
       <hr className="border-border" />
 
-      {/* Image overlays — multiple, draggable, wheel-zoomable on the preview */}
+      {/* Image overlays */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
           Images
@@ -369,7 +470,8 @@ export function StylePanel() {
 
       <hr className="border-border" />
 
-      {/* Manual text overlays — separate from auto-generated subtitle blocks. */}
+      {/* Text overlays — list of cards. Clicking one selects it and switches
+          the main controls above to edit that overlay's style. */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
           Texts
@@ -399,228 +501,32 @@ export function StylePanel() {
         return (
           <div
             key={ov.id}
-            className={`flex flex-col gap-2 rounded-md border p-2 ${
-              isSelected ? 'border-accent bg-accent/5' : 'border-border'
+            className={`flex items-center gap-2 rounded-md border p-2 cursor-pointer ${
+              isSelected ? 'border-accent bg-accent/5' : 'border-border hover:border-border-hi'
             }`}
             onClick={() => selectTextOverlay(ov.id)}
           >
-            <div className="flex items-start gap-2">
-              <textarea
-                value={ov.text}
-                onChange={(e) =>
-                  updateTextOverlay(ov.id, { text: e.target.value })
-                }
-                rows={Math.max(1, ov.text.split('\n').length)}
-                className="flex-1 resize-none rounded bg-bg-hi px-1.5 py-1 text-xs text-text outline-none"
-              />
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeTextOverlay(ov.id);
-                }}
-                title="Remove"
-              >
-                ✕
-              </Button>
+            <div className="min-w-0 flex-1 truncate text-xs text-text">
+              {ov.text || '(empty)'}
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-text-muted">
-              <label className="flex items-center gap-1">
-                <span>start</span>
-                <input
-                  type="number"
-                  step={0.05}
-                  value={ov.start.toFixed(2)}
-                  onChange={(e) =>
-                    updateTextOverlay(ov.id, { start: Number(e.target.value) })
-                  }
-                  className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono"
-                />
-              </label>
-              <label className="flex items-center gap-1">
-                <span>end</span>
-                <input
-                  type="number"
-                  step={0.05}
-                  value={ov.end.toFixed(2)}
-                  onChange={(e) =>
-                    updateTextOverlay(ov.id, { end: Number(e.target.value) })
-                  }
-                  className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono"
-                />
-              </label>
-            </div>
-
-            {/* Per-overlay font picker — drives only this overlay (controlled
-                mode) so changing it doesn't touch the global subtitle style. */}
-            <FontPicker
-              compact
-              value={{ family: ov.fontFamily, weight: ov.fontWeight }}
-              onChange={(family) =>
-                updateTextOverlay(ov.id, { fontFamily: family })
-              }
-            />
-            <Slider
-              label="Font weight"
-              min={100}
-              max={900}
-              step={100}
-              value={ov.fontWeight}
-              onChange={(v) => updateTextOverlay(ov.id, { fontWeight: v })}
-            />
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-text-muted">Italic</span>
-              <input
-                type="checkbox"
-                checked={ov.italic}
-                onChange={(e) =>
-                  updateTextOverlay(ov.id, { italic: e.target.checked })
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-text-muted">Text align</span>
-              <Select
-                className="w-28"
-                value={ov.textAlign}
-                onChange={(e) =>
-                  updateTextOverlay(ov.id, {
-                    textAlign: e.target.value as 'left' | 'center' | 'right',
-                  })
-                }
-              >
-                <option value="left">Left</option>
-                <option value="center">Center</option>
-                <option value="right">Right</option>
-              </Select>
-            </div>
-
-            <Slider
-              label="Size"
-              min={12}
-              max={200}
-              value={ov.fontSize}
-              unit="px"
-              onChange={(v) => updateTextOverlay(ov.id, { fontSize: v })}
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <ColorField
-                label="Text"
-                value={ov.textColor}
-                onChange={(v) => updateTextOverlay(ov.id, { textColor: v })}
-              />
-              <ColorField
-                label="Outline"
-                value={ov.textOutlineColor}
-                onChange={(v) =>
-                  updateTextOverlay(ov.id, { textOutlineColor: v })
-                }
-              />
-            </div>
-            <Slider
-              label="Outline width"
-              min={0}
-              max={10}
-              value={ov.textOutlineWidth}
-              unit="px"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { textOutlineWidth: v })
-              }
-            />
-
-            <ColorField
-              label="Background"
-              value={ov.backgroundColor}
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { backgroundColor: v })
-              }
-            />
-            <Slider
-              label="Background opacity"
-              min={0}
-              max={100}
-              value={Math.round(ov.backgroundOpacity * 100)}
-              unit="%"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { backgroundOpacity: v / 100 })
-              }
-            />
-            <Slider
-              label="Padding X"
-              min={0}
-              max={80}
-              value={ov.backgroundPaddingX}
-              unit="px"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { backgroundPaddingX: v })
-              }
-            />
-            <Slider
-              label="Padding Y"
-              min={0}
-              max={80}
-              value={ov.backgroundPaddingY}
-              unit="px"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { backgroundPaddingY: v })
-              }
-            />
-            <Slider
-              label="Corner radius"
-              min={0}
-              max={60}
-              value={ov.backgroundRadius}
-              unit="px"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { backgroundRadius: v })
-              }
-            />
-
-            <Slider
-              label="Position X"
-              min={0}
-              max={100}
-              value={Math.round(ov.positionX * 100)}
-              unit="%"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { positionX: v / 100 })
-              }
-            />
-            <Slider
-              label="Position Y"
-              min={0}
-              max={100}
-              value={Math.round(ov.positionY * 100)}
-              unit="%"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { positionY: v / 100 })
-              }
-            />
-            <Slider
-              label="Max width"
-              min={10}
-              max={100}
-              value={Math.round(ov.maxWidth * 100)}
-              unit="%"
-              onChange={(v) =>
-                updateTextOverlay(ov.id, { maxWidth: v / 100 })
-              }
-            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                removeTextOverlay(ov.id);
+              }}
+              title="Remove"
+            >
+              ✕
+            </Button>
           </div>
         );
       })}
 
       <hr className="border-border" />
 
-      {/* Safe-area / dead-zone overlays.
-          Only the presets that match the current video's aspect bucket are
-          shown — Instagram/TikTok/Shorts dead zones are vertical-only and
-          would be misleading on a 16:9 clip. If the user has a stale
-          selection (e.g. they loaded a 9:16 session then dropped a 16:9
-          video), we silently keep showing it but the gate stops them from
-          *picking* one that doesn't match.
-          The check below is intentionally loose — see bucketForAspect. */}
+      {/* Safe-area / dead-zone overlays */}
       <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
         Dead zones
       </h3>
