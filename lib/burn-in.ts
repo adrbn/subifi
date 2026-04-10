@@ -472,6 +472,27 @@ async function burnSubtitlesCore(
     if (videoDuration > 0 && time > 0) {
       p = (time / 1_000_000) / videoDuration;
     }
+
+    // FAST GARBAGE DETECTION: On Windows, @ffmpeg/core-mt produces a
+    // corrupt `time` value (e.g. 577014 hours) on the very first progress
+    // event, causing progress to jump to >100%. Detect this instantly and
+    // abort — no need to wait for the 30s stall timeout.
+    if (firstProgress && p > 1.5 && !stallTerminated) {
+      console.error(
+        `[burn] garbage progress on first event — MT core broken. ` +
+          `time=${time}, computed=${p.toFixed(1)}, duration=${videoDuration}. Aborting.`,
+      );
+      stallTerminated = true;
+      try {
+        ff.terminate();
+      } catch {
+        // ignore
+      }
+      if (activeFFmpeg === ff) activeFFmpeg = null;
+      resetFFmpeg();
+      return;
+    }
+
     if (firstProgress) {
       console.debug('[burn] first progress event', { progress, time, computed: p });
       firstProgress = false;
@@ -713,6 +734,9 @@ async function burnSubtitlesCore(
     const STALL_ABORT_MS = 30_000;
     const watchdogStart = Date.now();
     watchdog = setInterval(() => {
+      // Garbage detection (in progressHandler) may have already terminated.
+      if (stallTerminated) return;
+
       const sinceProgress = Date.now() - lastProgressAt;
       const sinceStart = Date.now() - watchdogStart;
       const elapsed = firstProgress ? sinceStart : sinceProgress;
