@@ -297,62 +297,53 @@ function buildOverlayComplex(
   return parts.join(';');
 }
 
-// Fetch a Google Font for burning. Strategy:
-//   1. /api/font proxy → static TTF from Fontsource / Google CSS scrape.
-//      Works for most fonts. The freetype baked into ffmpeg-wasm does NOT
-//      include brotli so woff2 silently fails to decode — TTF is required.
-//   2. Direct WOFF2 from Google CSS (browser fetch) — last-resort fallback.
-//      May not render in the wasm freetype; kept as a heuristic for fonts
-//      where no static TTF can be sourced.
+// Fetch a Google Font for burning as a TTF via the /api/font proxy.
+// The proxy tries Fontsource (jsdelivr CDN) first, then Google CSS scrape
+// with a legacy UA that triggers TTF responses.
+//
+// IMPORTANT: We ONLY accept TTF. The freetype build baked into ffmpeg-wasm
+// does NOT include brotli, so WOFF2 fonts silently fail to decode. If we
+// wrote a WOFF2 file to fontsdir, libass would skip it and fall back to a
+// built-in font — causing the "wrong font in export" bug. Better to return
+// null and let the caller surface a clear error.
 async function fetchGoogleFontFile(
   family: string,
   weight: number,
 ): Promise<{ name: string; buffer: ArrayBuffer } | null> {
   const safe = family.replace(/[^A-Za-z0-9]+/g, '_');
-  // Strategy 1: TTF via /api/font proxy (Fontsource → Google CSS scrape)
   try {
     const url = `/api/font?family=${encodeURIComponent(family)}&weight=${weight}`;
     const res = await fetch(url);
     if (res.ok) {
       const buffer = await res.arrayBuffer();
       if (buffer.byteLength > 0) {
-        console.debug(`[burn] got TTF for ${family}@${weight} (${buffer.byteLength} bytes)`);
+        // Quick TTF magic-number sanity check: real TTF starts with
+        // 0x00010000, 'true', or 'OTTO' (OTF/CFF).
+        const sig = new DataView(buffer).getUint32(0);
+        const isTTF =
+          sig === 0x00010000 ||
+          sig === 0x74727565 || // 'true'
+          sig === 0x4f54544f;   // 'OTTO'
+        if (!isTTF) {
+          console.warn(
+            `[burn] /api/font returned non-TTF data for ${family}@${weight} ` +
+              `(sig=0x${sig.toString(16)}, ${buffer.byteLength} bytes) — skipping`,
+          );
+          return null;
+        }
+        console.debug(
+          `[burn] got TTF for ${family}@${weight} (${buffer.byteLength} bytes)`,
+        );
         return { name: `${safe}-${weight}.ttf`, buffer };
       }
+    } else {
+      console.warn(
+        `[burn] /api/font returned ${res.status} for ${family}@${weight}`,
+      );
     }
-  } catch {
-    // fall through to woff2
+  } catch (err) {
+    console.warn(`[burn] font fetch failed for ${family}@${weight}`, err);
   }
-  // Strategy 2: WOFF2 direct from Google Fonts CSS (browser-side).
-  // This is the approach the original burn pipeline used and is proven
-  // to work with the wasm freetype build.
-  try {
-    const cssUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(
-      family,
-    )}:wght@${weight}&display=swap`;
-    const cssRes = await fetch(cssUrl, { mode: 'cors' });
-    if (cssRes.ok) {
-      const css = await cssRes.text();
-      const match = css.match(/url\((https:[^)]+\.woff2)\)/);
-      if (match) {
-        const fontRes = await fetch(match[1], { mode: 'cors' });
-        if (fontRes.ok) {
-          const buffer = await fontRes.arrayBuffer();
-          if (buffer.byteLength > 0) {
-            console.debug(
-              `[burn] got WOFF2 for ${family}@${weight} (${buffer.byteLength} bytes)`,
-            );
-            return { name: `${safe}-${weight}.woff2`, buffer };
-          }
-        }
-      }
-    }
-  } catch {
-    // fall through
-  }
-  console.warn(
-    `[burn] could not fetch font for ${family}@${weight} via either TTF or WOFF2`,
-  );
   return null;
 }
 
@@ -599,12 +590,22 @@ async function burnSubtitlesCore(
       if (internal) {
         fontNameMap.set(style.fontFamily, internal);
         console.debug(`[burn] font name remap: "${style.fontFamily}" → "${internal}"`);
+      } else {
+        console.warn(
+          `[burn] could not read internal name from TTF for "${style.fontFamily}" — ` +
+            `libass will try to match by the display name, which may fail`,
+        );
       }
       await ff.writeFile(
         `${fontsDir}/${mainFont.name}`,
         cloneBytesForFFmpeg(mainFont.buffer),
       );
       fontsWritten++;
+    } else {
+      console.warn(
+        `[burn] no TTF available for main font "${style.fontFamily}" @ ${style.fontWeight}. ` +
+          `Subtitles will render with libass built-in fallback font.`,
+      );
     }
 
     // Text overlay fonts (deduplicated).
@@ -660,6 +661,28 @@ async function burnSubtitlesCore(
     }
     await ff.writeFile(subsName, new TextEncoder().encode(assContent));
 
+    // Auto-cap export resolution to 1080p on the short side. Computed
+    // BEFORE overlays so we pre-scale overlay images to the effective
+    // (post-downscale) dimensions, not the original 4K size.
+    const MAX_SHORT_SIDE = 1080;
+    const shortSide = Math.min(videoWidth, videoHeight);
+    const shouldDownscale = shortSide > MAX_SHORT_SIDE;
+    const scaleRatio = shouldDownscale ? MAX_SHORT_SIDE / shortSide : 1;
+    const effectiveWidth = shouldDownscale
+      ? Math.max(2, Math.round((videoWidth * scaleRatio) / 2) * 2)
+      : videoWidth;
+    const effectiveHeight = shouldDownscale
+      ? Math.max(2, Math.round((videoHeight * scaleRatio) / 2) * 2)
+      : videoHeight;
+    // Subtitles are rendered BEFORE downscale (at native resolution) so
+    // PlayRes matches exactly — no rounding or font-metric drift. The
+    // scale filter comes AFTER subtitles. Overlays are applied after the
+    // scale and are pre-scaled to the effective dimensions.
+    const scaleSuffix = shouldDownscale
+      ? `,scale=${effectiveWidth}:${effectiveHeight}`
+      : '';
+    const subsFilter = `subtitles=${subsName}:fontsdir=${fontsDir}${scaleSuffix}`;
+
     // Decode each image overlay, pre-scale to its final pixel size in JS,
     // then write enough duplicate raw RGBA frames to cover the video
     // duration at 1fps. This avoids:
@@ -668,20 +691,19 @@ async function burnSubtitlesCore(
     // At 1fps the overlay filter holds each frame for 1s — perfect for
     // static images. Memory cost: ~(W×H×4×duration_s) per overlay, which
     // for a 200×150 overlay on a 3-minute video ≈ 21 MB.
+    // NOTE: overlays are pre-scaled to the EFFECTIVE (post-downscale)
+    // dimensions since the overlay filter runs after the scale.
     const OVERLAY_FPS = 1;
     const overlayMetas: OverlayMeta[] = [];
-    // Track which overlays actually decoded successfully — the filtered
-    // list is what buildOverlayComplex receives so indices stay in sync.
     const decodedOverlays: ImageOverlay[] = [];
     for (let i = 0; i < effectiveOverlays.length; i++) {
       const ov = effectiveOverlays[i];
-      const scaleW = Math.max(1, Math.round(videoWidth * ov.width));
+      const scaleW = Math.max(1, Math.round(effectiveWidth * ov.width));
       const decoded = await decodeImageScaled(ov.dataUrl, scaleW);
       if (decoded.rgba.byteLength === 0) {
         console.error(`[burn] overlay ${i} decoded to 0 bytes — skipping`);
         continue;
       }
-      // Duplicate the single frame to fill the video duration at OVERLAY_FPS
       const frameCount = Math.max(1, Math.ceil(videoDuration * OVERLAY_FPS) + 1);
       const frameBytes = decoded.rgba.byteLength;
       const totalBytes = frameCount * frameBytes;
@@ -696,27 +718,6 @@ async function burnSubtitlesCore(
       decodedOverlays.push(ov);
       console.debug(`[burn] overlay ${i}: ${decoded.width}x${decoded.height}, ${frameCount} frames @ ${OVERLAY_FPS}fps (${(totalBytes / 1024 / 1024).toFixed(1)} MB)`);
     }
-
-    // Auto-cap export resolution to 1080p on the short side. This is the
-    // single biggest speed win for phone footage shot at 4K: x264 cost is
-    // ~quadratic in pixel count, so 4K → 1080p is ~4x fewer pixels and ~4x
-    // faster at essentially no visible quality loss for social export.
-    // 1080p and below pass through unchanged. Downscaled dimensions are
-    // forced to even so libx264's YUV420 sampling is happy.
-    const MAX_SHORT_SIDE = 1080;
-    const shortSide = Math.min(videoWidth, videoHeight);
-    const shouldDownscale = shortSide > MAX_SHORT_SIDE;
-    const scaleRatio = shouldDownscale ? MAX_SHORT_SIDE / shortSide : 1;
-    const effectiveWidth = shouldDownscale
-      ? Math.max(2, Math.round((videoWidth * scaleRatio) / 2) * 2)
-      : videoWidth;
-    const effectiveHeight = shouldDownscale
-      ? Math.max(2, Math.round((videoHeight * scaleRatio) / 2) * 2)
-      : videoHeight;
-    const scalePrefix = shouldDownscale
-      ? `scale=${effectiveWidth}:${effectiveHeight},`
-      : '';
-    const subsFilter = `${scalePrefix}subtitles=${subsName}:fontsdir=${fontsDir}`;
 
     // The video / audio source labels feeding into the rest of the chain.
     // When cuts are present we route everything through the trim+concat
