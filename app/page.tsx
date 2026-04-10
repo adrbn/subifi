@@ -55,6 +55,7 @@ export default function Page() {
     blocks,
     currentTime,
     videoDuration,
+    undoRedoLabel,
   } = useEditor();
   const canUndo = past.length > 0;
   const canRedo = future.length > 0;
@@ -542,6 +543,15 @@ export default function Page() {
           already seen it (localStorage flag) or if the editor isn't ready
           yet. Mounted at the page root so it can spotlight any element. */}
       <OnboardingTour ready={tourReady} />
+
+      {/* Undo/redo toast */}
+      {undoRedoLabel && (
+        <div className="pointer-events-none fixed bottom-16 left-1/2 z-50 -translate-x-1/2 animate-fade-in">
+          <div className="rounded-full bg-bg-elev/90 px-3 py-1 text-xs text-text shadow-lg ring-1 ring-border backdrop-blur-sm">
+            {undoRedoLabel}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

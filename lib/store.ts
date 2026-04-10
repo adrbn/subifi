@@ -93,9 +93,37 @@ export type EditorState = {
   past: HistorySnapshot[];
   future: HistorySnapshot[];
   lastHistoryAt: number; // ms timestamp of the last push, for coalescing
+
+  // Ephemeral label shown after undo/redo — auto-clears after a few seconds.
+  undoRedoLabel: string | null;
 };
 
 const HISTORY_LIMIT = 50;
+
+// Describe what changed between two history snapshots.
+function describeChange(before: HistorySnapshot, after: HistorySnapshot): string {
+  if (before.blocks.length !== after.blocks.length) {
+    const d = after.blocks.length - before.blocks.length;
+    return d > 0 ? `+${d} subtitle(s)` : `${d} subtitle(s)`;
+  }
+  if (before.textOverlays.length !== after.textOverlays.length) {
+    const d = after.textOverlays.length - before.textOverlays.length;
+    return d > 0 ? `+${d} text overlay(s)` : `${d} text overlay(s)`;
+  }
+  if (before.overlays.length !== after.overlays.length) {
+    const d = after.overlays.length - before.overlays.length;
+    return d > 0 ? `+${d} image(s)` : `${d} image(s)`;
+  }
+  if (before.cuts.length !== after.cuts.length) {
+    const d = after.cuts.length - before.cuts.length;
+    return d > 0 ? `+${d} cut(s)` : `${d} cut(s)`;
+  }
+  if (before.style !== after.style) return 'style change';
+  if (before.blocks !== after.blocks) return 'subtitle edit';
+  if (before.textOverlays !== after.textOverlays) return 'text overlay edit';
+  if (before.overlays !== after.overlays) return 'image edit';
+  return 'edit';
+}
 // Window during which a follow-up mutation gets coalesced into the previous
 // undo entry — fast enough that intentional clicks stay separate, slow
 // enough that slider/trim drags fold into a single Cmd+Z step.
@@ -256,6 +284,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
   past: [],
   future: [],
   lastHistoryAt: 0,
+  undoRedoLabel: null,
 
   setVideo: (file, url, duration, width, height) =>
     set({
@@ -763,49 +792,53 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
   setProgress: (progress) => set({ progress }),
   setCurrentTime: (t) => set({ currentTime: t }),
 
-  undo: () =>
-    set((s) => {
-      if (s.past.length === 0) return s;
-      const prev = s.past[s.past.length - 1];
-      const past = s.past.slice(0, -1);
-      const future = [snap(s), ...s.future].slice(0, HISTORY_LIMIT);
-      return {
-        past,
-        future,
-        lastHistoryAt: 0,
-        blocks: prev.blocks,
-        subtitleTracks: prev.subtitleTracks,
-        activeTrackId: prev.activeTrackId,
-        textOverlays: prev.textOverlays,
-        overlays: prev.overlays,
-        style: prev.style,
-        segmentation: prev.segmentation,
-        safeZone: prev.safeZone,
-        cuts: prev.cuts,
-      };
-    }),
+  undo: () => {
+    const s = get();
+    if (s.past.length === 0) return;
+    const prev = s.past[s.past.length - 1];
+    const current = snap(s);
+    const label = `Undo: ${describeChange(prev, current)}`;
+    set({
+      past: s.past.slice(0, -1),
+      future: [current, ...s.future].slice(0, HISTORY_LIMIT),
+      lastHistoryAt: 0,
+      undoRedoLabel: label,
+      blocks: prev.blocks,
+      subtitleTracks: prev.subtitleTracks,
+      activeTrackId: prev.activeTrackId,
+      textOverlays: prev.textOverlays,
+      overlays: prev.overlays,
+      style: prev.style,
+      segmentation: prev.segmentation,
+      safeZone: prev.safeZone,
+      cuts: prev.cuts,
+    });
+    setTimeout(() => set({ undoRedoLabel: null }), 2000);
+  },
 
-  redo: () =>
-    set((s) => {
-      if (s.future.length === 0) return s;
-      const next = s.future[0];
-      const future = s.future.slice(1);
-      const past = [...s.past, snap(s)].slice(-HISTORY_LIMIT);
-      return {
-        past,
-        future,
-        lastHistoryAt: 0,
-        blocks: next.blocks,
-        subtitleTracks: next.subtitleTracks,
-        activeTrackId: next.activeTrackId,
-        textOverlays: next.textOverlays,
-        overlays: next.overlays,
-        style: next.style,
-        segmentation: next.segmentation,
-        safeZone: next.safeZone,
-        cuts: next.cuts,
-      };
-    }),
+  redo: () => {
+    const s = get();
+    if (s.future.length === 0) return;
+    const next = s.future[0];
+    const current = snap(s);
+    const label = `Redo: ${describeChange(current, next)}`;
+    set({
+      past: [...s.past, current].slice(-HISTORY_LIMIT),
+      future: s.future.slice(1),
+      lastHistoryAt: 0,
+      undoRedoLabel: label,
+      blocks: next.blocks,
+      subtitleTracks: next.subtitleTracks,
+      activeTrackId: next.activeTrackId,
+      textOverlays: next.textOverlays,
+      overlays: next.overlays,
+      style: next.style,
+      segmentation: next.segmentation,
+      safeZone: next.safeZone,
+      cuts: next.cuts,
+    });
+    setTimeout(() => set({ undoRedoLabel: null }), 2000);
+  },
 
   canUndo: () => get().past.length > 0,
   canRedo: () => get().future.length > 0,

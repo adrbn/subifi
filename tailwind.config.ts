@@ -30,6 +30,15 @@ const config: Config = {
       fontFamily: {
         sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
+      animation: {
+        'fade-in': 'fadeIn 0.15s ease-out',
+      },
+      keyframes: {
+        fadeIn: {
+          from: { opacity: '0', transform: 'translate(-50%, 8px)' },
+          to: { opacity: '1', transform: 'translate(-50%, 0)' },
+        },
+      },
     },
   },
   plugins: [],
