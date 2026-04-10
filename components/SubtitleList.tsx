@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { Button } from './ui/button';
 import clsx from 'clsx';
@@ -21,6 +22,7 @@ function scrubTo(seconds: number) {
 export function SubtitleList() {
   const {
     blocks,
+    style: globalStyle,
     updateBlock,
     mergeWithNext,
     deleteBlock,
@@ -28,7 +30,48 @@ export function SubtitleList() {
     currentTime,
     status,
     progress,
+    selectedBlockId,
+    selectBlock,
   } = useEditor();
+  // Track each row's textarea so the visible scissors button can read the
+  // caret position — Shift+Enter inside the textarea has access to the event
+  // target directly, but the button click happens outside the field.
+  const textareaRefs = useRef<Record<string, HTMLTextAreaElement>>({});
+  // Refs to each row's outer element so we can scroll one into view when
+  // the timeline asks us to focus a specific block.
+  const rowRefs = useRef<Record<string, HTMLDivElement>>({});
+  // Currently flashed-block id (briefly highlighted after a focus event so
+  // the user can see *which* row scrolled into view). Auto-clears after a
+  // short delay.
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  // Listen for `subifi:focus-block` events dispatched by the Timeline. When
+  // one arrives, scroll the matching row into view and flash it briefly.
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const id = (e as CustomEvent<{ id: string }>).detail?.id;
+      if (!id) return;
+      const el = rowRefs.current[id];
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setFlashId(id);
+      // 1.4s is long enough for the user to see the flash but short enough
+      // not to feel sticky after they start interacting with another row.
+      window.setTimeout(() => {
+        setFlashId((cur) => (cur === id ? null : cur));
+      }, 1400);
+    };
+    window.addEventListener('subifi:focus-block', onFocus);
+    return () => window.removeEventListener('subifi:focus-block', onFocus);
+  }, []);
+  // Which rows have their per-block style override panel expanded. Tracked
+  // locally because it's pure UI state — no need to put it in the store.
+  const [openOverrides, setOpenOverrides] = useState<Record<string, boolean>>(
+    {},
+  );
+
+  const toggleOverride = (id: string) =>
+    setOpenOverrides((prev) => ({ ...prev, [id]: !prev[id] }));
 
   if (blocks.length === 0) {
     let label = 'No subtitles yet — upload a video to start.';
@@ -52,12 +95,23 @@ export function SubtitleList() {
       <div className="flex flex-col gap-1.5">
         {blocks.map((b, i) => {
           const isActive = currentTime >= b.start && currentTime <= b.end;
+          const isFlash = flashId === b.id;
+          const isSelected = selectedBlockId === b.id;
           return (
             <div
               key={b.id}
+              ref={(el) => {
+                if (el) rowRefs.current[b.id] = el;
+              }}
+              onClick={() => selectBlock(b.id)}
               className={clsx(
-                'flex items-start gap-2 rounded-md border border-border bg-bg-elev px-2 py-2 transition-colors',
-                isActive && 'border-accent bg-accent/5',
+                'flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg-elev px-2 py-2 transition-colors',
+                isActive && !isSelected && 'border-accent/60 bg-accent/5',
+                // Selection wins over "active" so the user can clearly see
+                // which entry is currently the focus target regardless of
+                // the playhead position.
+                isSelected && 'border-accent bg-accent/10 ring-1 ring-accent',
+                isFlash && 'border-amber-400 ring-1 ring-amber-400/60',
               )}
             >
               <button
@@ -69,6 +123,9 @@ export function SubtitleList() {
               </button>
               <div className="flex flex-1 flex-col gap-1">
                 <textarea
+                  ref={(el) => {
+                    if (el) textareaRefs.current[b.id] = el;
+                  }}
                   value={b.text}
                   onChange={(e) => updateBlock(b.id, { text: e.target.value })}
                   onKeyDown={(e) => {
@@ -114,6 +171,36 @@ export function SubtitleList() {
                     />
                   </label>
                   <div className="ml-auto flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        const ta = textareaRefs.current[b.id];
+                        const pos = ta?.selectionStart ?? 0;
+                        // Only split when the caret is meaningfully inside
+                        // the text — otherwise we'd just produce an empty
+                        // sibling block.
+                        if (pos > 0 && pos < b.text.length) {
+                          splitBlockAt(b.id, pos);
+                        }
+                      }}
+                      title="Split at cursor (or press Shift+Enter)"
+                    >
+                      ✂
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => toggleOverride(b.id)}
+                      title="Override style for this subtitle only"
+                      className={clsx(
+                        b.styleOverride &&
+                          Object.keys(b.styleOverride).length > 0 &&
+                          'text-accent',
+                      )}
+                    >
+                      🎨
+                    </Button>
                     {i < blocks.length - 1 && (
                       <Button
                         variant="ghost"
@@ -128,12 +215,114 @@ export function SubtitleList() {
                       variant="ghost"
                       size="sm"
                       onClick={() => deleteBlock(b.id)}
-                      title="Delete"
+                      title="Delete this subtitle entry"
+                      className="text-text-muted hover:bg-red-950/40 hover:text-red-300"
                     >
                       ✕
                     </Button>
                   </div>
                 </div>
+                {openOverrides[b.id] && (
+                  <div className="mt-1 flex flex-wrap items-center gap-3 rounded border border-border bg-bg-hi/40 px-2 py-1.5 text-xs text-text-muted">
+                    <label className="flex items-center gap-1">
+                      <span>size</span>
+                      <input
+                        type="number"
+                        step={1}
+                        min={8}
+                        max={300}
+                        // Display the override if set, otherwise show the
+                        // global value as a placeholder so the field isn't
+                        // empty/confusing.
+                        value={
+                          b.styleOverride?.fontSize ?? globalStyle.fontSize
+                        }
+                        onChange={(e) =>
+                          updateBlock(b.id, {
+                            styleOverride: {
+                              ...b.styleOverride,
+                              fontSize: Number(e.target.value),
+                            },
+                          })
+                        }
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>color</span>
+                      <input
+                        type="color"
+                        value={
+                          b.styleOverride?.textColor ?? globalStyle.textColor
+                        }
+                        onChange={(e) =>
+                          updateBlock(b.id, {
+                            styleOverride: {
+                              ...b.styleOverride,
+                              textColor: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>Y%</span>
+                      <input
+                        type="number"
+                        step={1}
+                        min={0}
+                        max={100}
+                        value={Math.round(
+                          (b.styleOverride?.positionY ??
+                            globalStyle.positionY) * 100,
+                        )}
+                        onChange={(e) =>
+                          updateBlock(b.id, {
+                            styleOverride: {
+                              ...b.styleOverride,
+                              positionY: Number(e.target.value) / 100,
+                            },
+                          })
+                        }
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>weight</span>
+                      <input
+                        type="number"
+                        step={100}
+                        min={100}
+                        max={900}
+                        value={
+                          b.styleOverride?.fontWeight ?? globalStyle.fontWeight
+                        }
+                        onChange={(e) =>
+                          updateBlock(b.id, {
+                            styleOverride: {
+                              ...b.styleOverride,
+                              fontWeight: Number(e.target.value),
+                            },
+                          })
+                        }
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
+                      />
+                    </label>
+                    {b.styleOverride &&
+                      Object.keys(b.styleOverride).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateBlock(b.id, { styleOverride: undefined })
+                          }
+                          className="ml-auto rounded border border-border px-2 py-0.5 text-text-muted hover:border-accent hover:text-text"
+                          title="Reset this block to the global style"
+                        >
+                          reset
+                        </button>
+                      )}
+                  </div>
+                )}
               </div>
             </div>
           );

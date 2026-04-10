@@ -28,6 +28,10 @@ const baseStyle: Style = {
   positionY: 0.88,
   maxWidth: 0.85,
   textAlign: 'center',
+  lineHeight: 1.2,
+  letterSpacing: 0,
+  karaoke: false,
+  karaokeBaseColor: '#94a3b8', // slate-400 — neutral dim
 };
 
 export const STYLE_PRESETS: StylePreset[] = [
@@ -54,6 +58,26 @@ export const STYLE_PRESETS: StylePreset[] = [
       backgroundRadius: 0,
       positionY: 0.78,
       maxWidth: 0.9,
+    },
+  },
+  {
+    // Karaoke / word-pop preset — words start dim, light up as the audio
+    // hits them. Requires the transcription to have word-level timings,
+    // which Groq Whisper provides by default.
+    id: 'karaoke',
+    label: 'Karaoke',
+    style: {
+      ...baseStyle,
+      fontSize: 60,
+      fontWeight: 900,
+      textColor: '#fde047', // bright yellow for the spoken word
+      textOutlineColor: '#000000',
+      textOutlineWidth: 5,
+      backgroundOpacity: 0,
+      positionY: 0.8,
+      maxWidth: 0.9,
+      karaoke: true,
+      karaokeBaseColor: '#ffffff',
     },
   },
   {
@@ -98,7 +122,7 @@ export const STYLE_PRESETS: StylePreset[] = [
 export const DEFAULT_STYLE: Style = STYLE_PRESETS[0].style;
 
 export const SEGMENTATION_PRESETS: Record<
-  'cinema' | 'tiktok',
+  'cinema' | 'tiktok' | 'word',
   SegmentationConfig
 > = {
   cinema: {
@@ -116,6 +140,18 @@ export const SEGMENTATION_PRESETS: Record<
     maxDurationSec: 1.8,
     minDurationSec: 0.4,
     maxWordsPerBlock: 3,
+  },
+  // Word-by-word: each spoken word becomes its own block. Pairs naturally
+  // with the karaoke style preset for ultra-readable single-word reels.
+  // We zero minDurationSec so very short words don't fight with the
+  // segmenter's hard-boundary logic.
+  word: {
+    mode: 'word',
+    maxCharsPerLine: 40,
+    maxLines: 1,
+    maxDurationSec: 4,
+    minDurationSec: 0,
+    maxWordsPerBlock: 1,
   },
 };
 

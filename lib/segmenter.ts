@@ -56,6 +56,46 @@ function blockFromWords(cfg: SegmentationConfig, words: Word[]): SubtitleBlock {
   };
 }
 
+// Re-derive a flat word list from the current blocks. Used by `resegment`
+// so that re-running segmentation after a translation (or any inline edit)
+// keeps the user's text instead of reverting to the original transcription.
+//
+// For each block we prefer the block's own `words` if they still join back
+// to the current text — this preserves precise karaoke timings on blocks
+// the user has NOT touched. When the joined-words text differs from the
+// block text (translated / hand-edited), we fall back to splitting the
+// current text on whitespace and linearly distributing timings across the
+// block's [start, end] range. The result is fuzzier than original Whisper
+// word timings but it's the only way to keep the user's text alive across
+// a re-segmentation pass.
+export function wordsFromBlocks(blocks: SubtitleBlock[]): Word[] {
+  const out: Word[] = [];
+  for (const b of blocks) {
+    // Normalize whitespace (the segmenter inserts hard \n breaks into the
+    // text) so the comparison against joined-words is meaningful.
+    const normalizedText = b.text.replace(/\s+/g, ' ').trim();
+    if (b.words && b.words.length > 0) {
+      const joined = b.words.map((w) => w.text).join(' ').trim();
+      if (joined === normalizedText) {
+        out.push(...b.words);
+        continue;
+      }
+    }
+    const tokens = normalizedText.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const duration = Math.max(0, b.end - b.start);
+    const step = duration / tokens.length;
+    tokens.forEach((text, i) => {
+      out.push({
+        text,
+        start: b.start + i * step,
+        end: i === tokens.length - 1 ? b.end : b.start + (i + 1) * step,
+      });
+    });
+  }
+  return out;
+}
+
 export function segmentWords(
   words: Word[],
   cfg: SegmentationConfig,

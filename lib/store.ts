@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  Cut,
   CustomFont,
   ImageOverlay,
   SafeZone,
@@ -8,6 +9,8 @@ import type {
   Status,
   Style,
   SubtitleBlock,
+  SubtitleTrack,
+  TextOverlay,
   Word,
 } from './types';
 import {
@@ -17,8 +20,23 @@ import {
   DEFAULT_STYLE,
   SAFE_ZONE_PRESETS,
 } from './presets';
-import { segmentWords } from './segmenter';
+import { segmentWords, wordsFromBlocks } from './segmenter';
 import type { SessionSnapshot } from './persist';
+
+// Snapshot of all "editable" state — what undo/redo flips between. Runtime
+// fields like videoUrl, status, currentTime are NOT here on purpose: they
+// represent ephemeral playback / pipeline state, not user intent.
+type HistorySnapshot = {
+  blocks: SubtitleBlock[];
+  subtitleTracks: SubtitleTrack[];
+  activeTrackId: string;
+  textOverlays: TextOverlay[];
+  overlays: ImageOverlay[];
+  style: Style;
+  segmentation: SegmentationConfig;
+  safeZone: SafeZone;
+  cuts: Cut[];
+};
 
 export type EditorState = {
   // Video
@@ -34,7 +52,20 @@ export type EditorState = {
 
   // Transcription / blocks
   words: Word[];
+  // `blocks` is always the active track's blocks. Kept at top level so
+  // existing components (SubtitleList, Timeline, etc.) keep working without
+  // refactoring. Mutations via updateBlock/splitBlock/etc. update the active
+  // track automatically.
   blocks: SubtitleBlock[];
+  // Multi-track: each track is an independent subtitle layer (original,
+  // translations, etc.). The first track is always the "Original".
+  subtitleTracks: SubtitleTrack[];
+  activeTrackId: string;
+  // Currently "focused" subtitle block. Used by the SubtitleList, Timeline
+  // and VideoPreview to highlight the same row from any angle — clicking a
+  // block in any surface selects it in all three. Purely UI state, not
+  // persisted and not part of undo history.
+  selectedBlockId: string | null;
 
   // Styling
   style: Style;
@@ -42,13 +73,72 @@ export type EditorState = {
   customFonts: CustomFont[];
   overlays: ImageOverlay[];
   selectedOverlayId: string | null;
+  textOverlays: TextOverlay[];
+  selectedTextOverlayId: string | null;
   safeZone: SafeZone;
+
+  // Cuts — segments removed from the source at burn time. Stored in
+  // original-video time. See lib/cuts.ts for the math that turns these
+  // into post-cut keep-ranges and remaps subtitle/text overlay timings.
+  cuts: Cut[];
 
   // Runtime
   status: Status;
   error: string | null;
   progress: number; // 0..1, used for extraction / burning
   currentTime: number; // playback position in seconds
+
+  // Undo/redo history. `past` is oldest→newest of pre-mutation snapshots;
+  // `future` is what undo has popped off and could be re-applied by redo.
+  past: HistorySnapshot[];
+  future: HistorySnapshot[];
+  lastHistoryAt: number; // ms timestamp of the last push, for coalescing
+};
+
+const HISTORY_LIMIT = 50;
+// Window during which a follow-up mutation gets coalesced into the previous
+// undo entry — fast enough that intentional clicks stay separate, slow
+// enough that slider/trim drags fold into a single Cmd+Z step.
+const HISTORY_COALESCE_MS = 350;
+
+const DEFAULT_TRACK_ID = 'original';
+
+const snap = (s: EditorState): HistorySnapshot => ({
+  blocks: s.blocks,
+  subtitleTracks: s.subtitleTracks,
+  activeTrackId: s.activeTrackId,
+  textOverlays: s.textOverlays,
+  overlays: s.overlays,
+  style: s.style,
+  segmentation: s.segmentation,
+  safeZone: s.safeZone,
+  cuts: s.cuts,
+});
+
+// Sync `blocks` into the active track within `subtitleTracks`.
+function syncBlocksToTrack(
+  tracks: SubtitleTrack[],
+  activeTrackId: string,
+  blocks: SubtitleBlock[],
+): SubtitleTrack[] {
+  return tracks.map((t) =>
+    t.id === activeTrackId ? { ...t, blocks } : t,
+  );
+}
+
+// Returns the patch to merge into a `set()` so that this mutation becomes
+// undoable. Coalesces with the previous push if it happened very recently.
+const pushHistory = (
+  s: EditorState,
+): Pick<EditorState, 'past' | 'future' | 'lastHistoryAt'> => {
+  const now = Date.now();
+  if (now - s.lastHistoryAt < HISTORY_COALESCE_MS && s.past.length > 0) {
+    // Same gesture — keep the existing snapshot (which captures the state
+    // *before* the gesture started), reset the future stack.
+    return { past: s.past, future: [], lastHistoryAt: now };
+  }
+  const past = [...s.past, snap(s)].slice(-HISTORY_LIMIT);
+  return { past, future: [], lastHistoryAt: now };
 };
 
 export type EditorActions = {
@@ -68,17 +158,58 @@ export type EditorActions = {
   splitBlockAt: (id: string, charIndex: number) => void;
   mergeWithNext: (id: string) => void;
   deleteBlock: (id: string) => void;
+  selectBlock: (id: string | null) => void;
   setStyle: (patch: Partial<Style>) => void;
   applyStylePreset: (style: Style) => void;
   addCustomFont: (font: CustomFont) => void;
-  addOverlay: (overlay: Omit<ImageOverlay, 'id'>) => string;
+  // `start`/`end` default to "spans the whole video" if omitted, so most
+  // call sites just pass the visual fields (dataUrl/positionX/etc.).
+  addOverlay: (
+    overlay: Omit<ImageOverlay, 'id' | 'start' | 'end'> &
+      Partial<Pick<ImageOverlay, 'start' | 'end'>>,
+  ) => string;
   removeOverlay: (id: string) => void;
   updateOverlay: (id: string, patch: Partial<ImageOverlay>) => void;
   selectOverlay: (id: string | null) => void;
+  addTextOverlay: (overlay?: Partial<Omit<TextOverlay, 'id'>>) => string;
+  removeTextOverlay: (id: string) => void;
+  updateTextOverlay: (id: string, patch: Partial<TextOverlay>) => void;
+  selectTextOverlay: (id: string | null) => void;
   setSafeZonePreset: (preset: SafeZonePreset) => void;
+  // Subtitle tracks — multi-layer subtitle management.
+  addSubtitleTrack: (label: string, blocks: SubtitleBlock[]) => string;
+  removeSubtitleTrack: (id: string) => void;
+  setActiveTrack: (id: string) => void;
+  toggleTrackVisibility: (id: string) => void;
+  // Toggle visibility of text overlays / image overlays / cuts in bulk.
+  // These flags are stored as simple booleans on the store for simplicity.
+  textOverlaysVisible: boolean;
+  imageOverlaysVisible: boolean;
+  cutsVisible: boolean;
+  toggleTextOverlaysVisible: () => void;
+  toggleImageOverlaysVisible: () => void;
+  toggleCutsVisible: () => void;
+  // Split the currently selected element (block, text overlay, or image
+  // overlay) at the playhead into two pieces. No-ops if nothing is
+  // selected or the playhead is outside the element's range.
+  splitSelectedAtPlayhead: () => void;
+  // Cuts. addCut creates a new cut centred on the current playhead and
+  // returns its id so callers (e.g. the timeline) can immediately select
+  // / drag it. Default duration is 1 second, clamped to the video.
+  addCut: (cut?: Partial<Omit<Cut, 'id'>>) => string;
+  updateCut: (id: string, patch: Partial<Cut>) => void;
+  removeCut: (id: string) => void;
+  clearCuts: () => void;
+  // Returns all blocks from visible subtitle tracks, concatenated.
+  visibleBlocks: () => SubtitleBlock[];
   setStatus: (status: Status, error?: string | null) => void;
   setProgress: (progress: number) => void;
   setCurrentTime: (t: number) => void;
+  // Undo / redo. Both no-op when their stack is empty.
+  undo: () => void;
+  redo: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
   // Rehydrate the editor from a previously persisted session (see
   // lib/persist.ts). Recreates a fresh blob URL from the stored File and
   // infers a sensible starting `status` from what was saved.
@@ -96,18 +227,35 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   words: [],
   blocks: [],
+  subtitleTracks: [
+    { id: DEFAULT_TRACK_ID, label: 'Original', visible: true, blocks: [] },
+  ],
+  activeTrackId: DEFAULT_TRACK_ID,
+  selectedBlockId: null,
 
   style: DEFAULT_STYLE,
   segmentation: DEFAULT_SEGMENTATION,
   customFonts: [],
   overlays: DEFAULT_OVERLAYS,
   selectedOverlayId: null,
+  textOverlays: [],
+  selectedTextOverlayId: null,
   safeZone: DEFAULT_SAFE_ZONE,
+
+  cuts: [],
+
+  textOverlaysVisible: true,
+  imageOverlaysVisible: true,
+  cutsVisible: true,
 
   status: 'idle',
   error: null,
   progress: 0,
   currentTime: 0,
+
+  past: [],
+  future: [],
+  lastHistoryAt: 0,
 
   setVideo: (file, url, duration, width, height) =>
     set({
@@ -119,10 +267,21 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       extractedAudio: null,
       words: [],
       blocks: [],
+      subtitleTracks: [
+        { id: DEFAULT_TRACK_ID, label: 'Original', visible: true, blocks: [] },
+      ],
+      activeTrackId: DEFAULT_TRACK_ID,
+      selectedBlockId: null,
+      textOverlays: [],
+      selectedTextOverlayId: null,
+      cuts: [],
       status: 'idle',
       error: null,
       progress: 0,
       currentTime: 0,
+      past: [],
+      future: [],
+      lastHistoryAt: 0,
     }),
 
   clearVideo: () => {
@@ -135,33 +294,77 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       extractedAudio: null,
       words: [],
       blocks: [],
+      subtitleTracks: [
+        { id: DEFAULT_TRACK_ID, label: 'Original', visible: true, blocks: [] },
+      ],
+      activeTrackId: DEFAULT_TRACK_ID,
+      selectedBlockId: null,
+      textOverlays: [],
+      selectedTextOverlayId: null,
+      cuts: [],
       status: 'idle',
       error: null,
       progress: 0,
       currentTime: 0,
+      past: [],
+      future: [],
+      lastHistoryAt: 0,
     });
   },
 
   setExtractedAudio: (audio) => set({ extractedAudio: audio }),
 
-  setBlocks: (blocks) => set({ blocks, status: 'ready' }),
+  setBlocks: (blocks) =>
+    // Fresh transcription / external load — wipe history. Undoing back to
+    // an empty editor isn't useful and would just confuse the user.
+    set((s) => ({
+      blocks,
+      subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, blocks),
+      selectedBlockId: null,
+      status: 'ready',
+      past: [],
+      future: [],
+      lastHistoryAt: 0,
+    })),
 
   setWords: (words) => {
-    const { segmentation } = get();
-    const blocks = segmentWords(words, segmentation);
-    set({ words, blocks, status: 'ready' });
+    const s = get();
+    const blocks = segmentWords(words, s.segmentation);
+    set({
+      words,
+      blocks,
+      subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, blocks),
+      selectedBlockId: null,
+      status: 'ready',
+      past: [],
+      future: [],
+      lastHistoryAt: 0,
+    });
   },
 
-  resegment: (cfg) => {
-    const { words, segmentation } = get();
-    const next = { ...segmentation, ...(cfg ?? {}) };
-    set({ segmentation: next, blocks: segmentWords(words, next) });
-  },
+  resegment: (cfg) =>
+    set((s) => {
+      const next = { ...s.segmentation, ...(cfg ?? {}) };
+      const sourceWords =
+        s.blocks.length > 0 ? wordsFromBlocks(s.blocks) : s.words;
+      const newBlocks = segmentWords(sourceWords, next);
+      return {
+        ...pushHistory(s),
+        segmentation: next,
+        blocks: newBlocks,
+        subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, newBlocks),
+      };
+    }),
 
   updateBlock: (id, patch) =>
-    set((s) => ({
-      blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
-    })),
+    set((s) => {
+      const newBlocks = s.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b));
+      return {
+        ...pushHistory(s),
+        blocks: newBlocks,
+        subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, newBlocks),
+      };
+    }),
 
   splitBlockAt: (id, charIndex) =>
     set((s) => {
@@ -172,19 +375,14 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       const right = b.text.slice(charIndex).replace(/^\s+/, '');
       if (!left || !right) return s;
 
-      // If we have word-level timings, find the word boundary closest to
-      // the character index and use its real start time. Otherwise fall
-      // back to linear interpolation.
       let mid = b.start + (b.end - b.start) * (charIndex / b.text.length);
       let leftWords: Word[] | undefined;
       let rightWords: Word[] | undefined;
       if (b.words && b.words.length > 0) {
-        // Walk the plain word tokens and find which one contains charIndex.
-        // We use the raw text join to match the editable text closely.
         let running = 0;
         let splitWordIdx = 0;
         for (let i = 0; i < b.words.length; i++) {
-          const wLen = b.words[i].text.length + (i > 0 ? 1 : 0); // +1 for space
+          const wLen = b.words[i].text.length + (i > 0 ? 1 : 0);
           if (running + wLen >= charIndex) {
             splitWordIdx = i;
             break;
@@ -213,8 +411,11 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         text: right,
         words: rightWords,
       };
+      const newBlocks = [...s.blocks.slice(0, idx), a, c, ...s.blocks.slice(idx + 1)];
       return {
-        blocks: [...s.blocks.slice(0, idx), a, c, ...s.blocks.slice(idx + 1)],
+        ...pushHistory(s),
+        blocks: newBlocks,
+        subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, newBlocks),
       };
     }),
 
@@ -230,25 +431,53 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         end: b.end,
         text: `${a.text} ${b.text}`.trim(),
       };
+      const newBlocks = [...s.blocks.slice(0, idx), merged, ...s.blocks.slice(idx + 2)];
       return {
-        blocks: [...s.blocks.slice(0, idx), merged, ...s.blocks.slice(idx + 2)],
+        ...pushHistory(s),
+        blocks: newBlocks,
+        subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, newBlocks),
       };
     }),
 
   deleteBlock: (id) =>
-    set((s) => ({ blocks: s.blocks.filter((b) => b.id !== id) })),
+    set((s) => {
+      const newBlocks = s.blocks.filter((b) => b.id !== id);
+      return {
+        ...pushHistory(s),
+        blocks: newBlocks,
+        subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, newBlocks),
+        selectedBlockId: s.selectedBlockId === id ? null : s.selectedBlockId,
+      };
+    }),
 
-  setStyle: (patch) => set((s) => ({ style: { ...s.style, ...patch } })),
+  selectBlock: (id) => set({ selectedBlockId: id }),
 
-  applyStylePreset: (style) => set({ style }),
+  setStyle: (patch) =>
+    set((s) => ({ ...pushHistory(s), style: { ...s.style, ...patch } })),
+
+  applyStylePreset: (style) => set((s) => ({ ...pushHistory(s), style })),
 
   addCustomFont: (font) =>
     set((s) => ({ customFonts: [...s.customFonts, font] })),
 
   addOverlay: (overlay) => {
     const id = Math.random().toString(36).slice(2, 10);
-    set((s) => ({
-      overlays: [...s.overlays, { id, ...overlay }],
+    const s = get();
+    // Default a fresh image overlay to spanning the whole video. The user
+    // can trim it on the timeline. Falls back to a 5-second window starting
+    // at the playhead if there's no duration yet (rare — covers the case
+    // where the metadata hasn't loaded).
+    const dur = s.videoDuration || 0;
+    const fallbackEnd = (s.currentTime || 0) + 5;
+    const fresh: ImageOverlay = {
+      id,
+      ...overlay,
+      start: overlay.start ?? 0,
+      end: overlay.end ?? (dur > 0 ? dur : fallbackEnd),
+    };
+    set((st) => ({
+      ...pushHistory(st),
+      overlays: [...st.overlays, fresh],
       selectedOverlayId: id,
     }));
     return id;
@@ -256,6 +485,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   removeOverlay: (id) =>
     set((s) => ({
+      ...pushHistory(s),
       overlays: s.overlays.filter((o) => o.id !== id),
       selectedOverlayId:
         s.selectedOverlayId === id ? null : s.selectedOverlayId,
@@ -263,16 +493,311 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   updateOverlay: (id, patch) =>
     set((s) => ({
+      ...pushHistory(s),
       overlays: s.overlays.map((o) => (o.id === id ? { ...o, ...patch } : o)),
     })),
 
   selectOverlay: (id) => set({ selectedOverlayId: id }),
 
-  setSafeZonePreset: (preset) => set({ safeZone: SAFE_ZONE_PRESETS[preset] }),
+  addTextOverlay: (overlay) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const s = get();
+    // Default a fresh text overlay to "centered, ~3 seconds, around the
+    // current playhead". This is the most common starting point — users
+    // can drag/edit from there.
+    const t = Math.max(0, s.currentTime || 0);
+    const fresh: TextOverlay = {
+      id,
+      text: overlay?.text ?? 'New text',
+      start: overlay?.start ?? t,
+      end: overlay?.end ?? Math.min(s.videoDuration || t + 3, t + 3),
+      positionX: overlay?.positionX ?? 0.5,
+      positionY: overlay?.positionY ?? 0.2,
+      fontFamily: overlay?.fontFamily ?? s.style.fontFamily,
+      fontSize: overlay?.fontSize ?? Math.round(s.style.fontSize * 1.1),
+      fontWeight: overlay?.fontWeight ?? 800,
+      italic: overlay?.italic ?? false,
+      textColor: overlay?.textColor ?? '#ffffff',
+      textOutlineColor: overlay?.textOutlineColor ?? '#000000',
+      textOutlineWidth: overlay?.textOutlineWidth ?? 3,
+      backgroundColor: overlay?.backgroundColor ?? '#000000',
+      backgroundOpacity: overlay?.backgroundOpacity ?? 0,
+      backgroundPaddingX: overlay?.backgroundPaddingX ?? 16,
+      backgroundPaddingY: overlay?.backgroundPaddingY ?? 8,
+      backgroundRadius: overlay?.backgroundRadius ?? 8,
+      textAlign: overlay?.textAlign ?? 'center',
+      maxWidth: overlay?.maxWidth ?? 0.85,
+    };
+    set((st) => ({
+      ...pushHistory(st),
+      textOverlays: [...st.textOverlays, fresh],
+      selectedTextOverlayId: id,
+    }));
+    return id;
+  },
+
+  removeTextOverlay: (id) =>
+    set((s) => ({
+      ...pushHistory(s),
+      textOverlays: s.textOverlays.filter((t) => t.id !== id),
+      selectedTextOverlayId:
+        s.selectedTextOverlayId === id ? null : s.selectedTextOverlayId,
+    })),
+
+  updateTextOverlay: (id, patch) =>
+    set((s) => ({
+      ...pushHistory(s),
+      textOverlays: s.textOverlays.map((t) =>
+        t.id === id ? { ...t, ...patch } : t,
+      ),
+    })),
+
+  selectTextOverlay: (id) => set({ selectedTextOverlayId: id }),
+
+  setSafeZonePreset: (preset) =>
+    set((s) => ({ ...pushHistory(s), safeZone: SAFE_ZONE_PRESETS[preset] })),
+
+  // --- Subtitle tracks ---
+
+  addSubtitleTrack: (label, blocks) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    set((s) => ({
+      ...pushHistory(s),
+      subtitleTracks: [
+        ...s.subtitleTracks,
+        { id, label, visible: true, blocks },
+      ],
+    }));
+    return id;
+  },
+
+  removeSubtitleTrack: (id) =>
+    set((s) => {
+      // Can't remove the last track.
+      if (s.subtitleTracks.length <= 1) return s;
+      const next = s.subtitleTracks.filter((t) => t.id !== id);
+      const wasActive = s.activeTrackId === id;
+      const newActive = wasActive ? next[0].id : s.activeTrackId;
+      const newBlocks = wasActive ? next[0].blocks : s.blocks;
+      return {
+        ...pushHistory(s),
+        subtitleTracks: next,
+        activeTrackId: newActive,
+        blocks: newBlocks,
+      };
+    }),
+
+  setActiveTrack: (id) =>
+    set((s) => {
+      const track = s.subtitleTracks.find((t) => t.id === id);
+      if (!track) return s;
+      // Sync current blocks into the old active track, then switch.
+      const synced = syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, s.blocks);
+      return {
+        subtitleTracks: synced,
+        activeTrackId: id,
+        blocks: track.blocks,
+        selectedBlockId: null,
+      };
+    }),
+
+  toggleTrackVisibility: (id) =>
+    set((s) => ({
+      subtitleTracks: s.subtitleTracks.map((t) =>
+        t.id === id ? { ...t, visible: !t.visible } : t,
+      ),
+    })),
+
+  toggleTextOverlaysVisible: () =>
+    set((s) => ({ textOverlaysVisible: !s.textOverlaysVisible })),
+  toggleImageOverlaysVisible: () =>
+    set((s) => ({ imageOverlaysVisible: !s.imageOverlaysVisible })),
+  toggleCutsVisible: () =>
+    set((s) => ({ cutsVisible: !s.cutsVisible })),
+
+  // --- Split at playhead ---
+
+  splitSelectedAtPlayhead: () =>
+    set((s) => {
+      const t = s.currentTime;
+      // Try subtitle block first
+      if (s.selectedBlockId) {
+        const idx = s.blocks.findIndex((b) => b.id === s.selectedBlockId);
+        if (idx < 0) return s;
+        const b = s.blocks[idx];
+        if (t <= b.start || t >= b.end) return s;
+        // Find character index closest to time t for text splitting
+        const ratio = (t - b.start) / (b.end - b.start);
+        const charIdx = Math.round(ratio * b.text.length);
+        const left = b.text.slice(0, charIdx).replace(/\s+$/, '') || b.text;
+        const right = b.text.slice(charIdx).replace(/^\s+/, '') || b.text;
+        let leftWords: Word[] | undefined;
+        let rightWords: Word[] | undefined;
+        if (b.words && b.words.length > 0) {
+          const splitWordIdx = b.words.findIndex((w) => w.start >= t);
+          if (splitWordIdx > 0) {
+            leftWords = b.words.slice(0, splitWordIdx);
+            rightWords = b.words.slice(splitWordIdx);
+          }
+        }
+        const a: SubtitleBlock = {
+          id: Math.random().toString(36).slice(2, 10),
+          start: b.start,
+          end: t,
+          text: left,
+          words: leftWords,
+        };
+        const c: SubtitleBlock = {
+          id: Math.random().toString(36).slice(2, 10),
+          start: t,
+          end: b.end,
+          text: right,
+          words: rightWords,
+        };
+        const newBlocks = [...s.blocks.slice(0, idx), a, c, ...s.blocks.slice(idx + 1)];
+        return {
+          ...pushHistory(s),
+          blocks: newBlocks,
+          subtitleTracks: syncBlocksToTrack(s.subtitleTracks, s.activeTrackId, newBlocks),
+          selectedBlockId: a.id,
+        };
+      }
+      // Try text overlay
+      if (s.selectedTextOverlayId) {
+        const idx = s.textOverlays.findIndex(
+          (o) => o.id === s.selectedTextOverlayId,
+        );
+        if (idx < 0) return s;
+        const o = s.textOverlays[idx];
+        if (t <= o.start || t >= o.end) return s;
+        const a: TextOverlay = { ...o, end: t };
+        const b: TextOverlay = {
+          ...o,
+          id: Math.random().toString(36).slice(2, 10),
+          start: t,
+        };
+        return {
+          ...pushHistory(s),
+          textOverlays: [...s.textOverlays.slice(0, idx), a, b, ...s.textOverlays.slice(idx + 1)],
+          selectedTextOverlayId: a.id,
+        };
+      }
+      // Try image overlay
+      if (s.selectedOverlayId) {
+        const idx = s.overlays.findIndex(
+          (o) => o.id === s.selectedOverlayId,
+        );
+        if (idx < 0) return s;
+        const o = s.overlays[idx];
+        if (t <= o.start || t >= o.end) return s;
+        const a: ImageOverlay = { ...o, end: t };
+        const b: ImageOverlay = {
+          ...o,
+          id: Math.random().toString(36).slice(2, 10),
+          start: t,
+        };
+        return {
+          ...pushHistory(s),
+          overlays: [...s.overlays.slice(0, idx), a, b, ...s.overlays.slice(idx + 1)],
+          selectedOverlayId: a.id,
+        };
+      }
+      return s;
+    }),
+
+  visibleBlocks: () => {
+    const s = get();
+    return s.subtitleTracks
+      .filter((t) => t.visible)
+      .flatMap((t) => t.blocks);
+  },
+
+  addCut: (cut) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const s = get();
+    // Default cut: 1 second wide centred on the playhead, clamped to the
+    // video. Falls back to [0, min(1, duration)] if there's no playhead /
+    // duration yet (happens before the video metadata is loaded).
+    const dur = s.videoDuration || 0;
+    const t = Math.max(0, Math.min(dur, s.currentTime || 0));
+    const halfWidth = 0.5;
+    const fresh: Cut = {
+      id,
+      start: cut?.start ?? Math.max(0, t - halfWidth),
+      end: cut?.end ?? Math.min(dur || t + 1, t + halfWidth),
+    };
+    set((st) => ({
+      ...pushHistory(st),
+      cuts: [...st.cuts, fresh],
+    }));
+    return id;
+  },
+
+  updateCut: (id, patch) =>
+    set((s) => ({
+      ...pushHistory(s),
+      cuts: s.cuts.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+    })),
+
+  removeCut: (id) =>
+    set((s) => ({
+      ...pushHistory(s),
+      cuts: s.cuts.filter((c) => c.id !== id),
+    })),
+
+  clearCuts: () =>
+    set((s) => (s.cuts.length === 0 ? s : { ...pushHistory(s), cuts: [] })),
 
   setStatus: (status, error = null) => set({ status, error }),
   setProgress: (progress) => set({ progress }),
   setCurrentTime: (t) => set({ currentTime: t }),
+
+  undo: () =>
+    set((s) => {
+      if (s.past.length === 0) return s;
+      const prev = s.past[s.past.length - 1];
+      const past = s.past.slice(0, -1);
+      const future = [snap(s), ...s.future].slice(0, HISTORY_LIMIT);
+      return {
+        past,
+        future,
+        lastHistoryAt: 0,
+        blocks: prev.blocks,
+        subtitleTracks: prev.subtitleTracks,
+        activeTrackId: prev.activeTrackId,
+        textOverlays: prev.textOverlays,
+        overlays: prev.overlays,
+        style: prev.style,
+        segmentation: prev.segmentation,
+        safeZone: prev.safeZone,
+        cuts: prev.cuts,
+      };
+    }),
+
+  redo: () =>
+    set((s) => {
+      if (s.future.length === 0) return s;
+      const next = s.future[0];
+      const future = s.future.slice(1);
+      const past = [...s.past, snap(s)].slice(-HISTORY_LIMIT);
+      return {
+        past,
+        future,
+        lastHistoryAt: 0,
+        blocks: next.blocks,
+        subtitleTracks: next.subtitleTracks,
+        activeTrackId: next.activeTrackId,
+        textOverlays: next.textOverlays,
+        overlays: next.overlays,
+        style: next.style,
+        segmentation: next.segmentation,
+        safeZone: next.safeZone,
+        cuts: next.cuts,
+      };
+    }),
+
+  canUndo: () => get().past.length > 0,
+  canRedo: () => get().future.length > 0,
 
   hydrate: (snapshot) =>
     set((s) => {
@@ -301,16 +826,46 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         extractedAudio: snapshot.extractedAudio,
         words: snapshot.words,
         blocks: snapshot.blocks,
-        style: snapshot.style,
+        // Forward compat: snapshots saved before multi-track existed have no
+        // subtitleTracks field — fall back to a single "Original" track with
+        // the blocks from the snapshot.
+        subtitleTracks: (snapshot as Record<string, unknown>).subtitleTracks
+          ? ((snapshot as Record<string, unknown>).subtitleTracks as SubtitleTrack[])
+          : [{ id: DEFAULT_TRACK_ID, label: 'Original', visible: true, blocks: snapshot.blocks }],
+        activeTrackId:
+          ((snapshot as Record<string, unknown>).activeTrackId as string) || DEFAULT_TRACK_ID,
+        selectedBlockId: null,
+        // Merge over DEFAULT_STYLE so older snapshots saved before we
+        // added new Style fields (e.g. karaoke) hydrate with the default
+        // for those fields instead of `undefined`.
+        style: { ...DEFAULT_STYLE, ...snapshot.style },
         segmentation: snapshot.segmentation,
         customFonts: snapshot.customFonts,
-        overlays: snapshot.overlays,
+        // Forward compat: image overlays gained start/end. Snapshots saved
+        // before that change have undefined for both, so default to "visible
+        // for the entire video" — which is what they were before time gating
+        // existed.
+        overlays: snapshot.overlays.map((o) => ({
+          ...o,
+          start: o.start ?? 0,
+          end: o.end ?? (snapshot.videoDuration || 0),
+        })),
         selectedOverlayId: snapshot.selectedOverlayId,
+        textOverlays: snapshot.textOverlays ?? [],
+        selectedTextOverlayId: snapshot.selectedTextOverlayId ?? null,
         safeZone: snapshot.safeZone,
+        // Forward compat: a snapshot saved before cuts existed has no
+        // `cuts` field, so default to an empty array instead of undefined.
+        cuts: snapshot.cuts ?? [],
         status: nextStatus,
         error: null,
         progress: 0,
         currentTime: 0,
+        // Loading a session is the new "starting point" — discard any
+        // history that was sitting in the live store.
+        past: [],
+        future: [],
+        lastHistoryAt: 0,
       };
     }),
 }));

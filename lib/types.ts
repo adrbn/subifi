@@ -12,6 +12,27 @@ export type SubtitleBlock = {
   end: number; // seconds
   text: string; // may contain \n
   words?: Word[]; // preserved so re-segmentation can rebuild from raw words
+  // Per-block style overrides — only the fields the user actually changed
+  // are stored. The renderer (preview + ASS generator) merges these on top
+  // of the global Style. Empty / undefined means "use the global style".
+  styleOverride?: Partial<Style>;
+};
+
+// A SubtitleTrack groups together one logical "subtitle layer" — the
+// original transcription, a translation, an alt-language version, etc.
+// Tracks coexist: the user can toggle each one's visibility independently
+// via the eye button on the timeline lane. Visible tracks are concatenated
+// into the burn output (and the preview), so multiple languages can be
+// burned simultaneously if the user positions them carefully.
+//
+// The `blocks` array on a track is the same shape as the legacy top-level
+// `blocks` array — every per-block helper (segmentation, splitting, merge)
+// works on it unchanged.
+export type SubtitleTrack = {
+  id: string;
+  label: string; // e.g. "Original", "Français", "한국어"
+  visible: boolean;
+  blocks: SubtitleBlock[];
 };
 
 export type Style = {
@@ -31,9 +52,23 @@ export type Style = {
   positionY: number; // 0..1 fraction of video height, center of textbox
   maxWidth: number; // 0..1 fraction of video width
   textAlign: 'left' | 'center' | 'right';
+  // Multiplier applied to the font's natural line height. 1.0 = tight,
+  // 1.2 ≈ default reading rhythm, 1.6 ≈ loose. Preview-only — libass uses
+  // the font's intrinsic line height in burned output.
+  lineHeight: number;
+  // Extra space between letters, in pixels (positive or negative). Maps
+  // 1:1 to ASS `Spacing` / inline `\fsp` so the burn matches the preview.
+  letterSpacing: number;
+  // Karaoke / word-pop: highlight the currently-spoken word in real time.
+  // Requires word-level timings (block.words). When off, the block renders
+  // as a single styled string and karaokeBaseColor is ignored.
+  karaoke: boolean;
+  // Color used for words that have NOT yet been spoken (the "dim" color).
+  // The active and already-spoken words use textColor.
+  karaokeBaseColor: string;
 };
 
-export type SegmentationMode = 'cinema' | 'tiktok' | 'custom';
+export type SegmentationMode = 'cinema' | 'tiktok' | 'word' | 'custom';
 
 export type SegmentationConfig = {
   mode: SegmentationMode;
@@ -63,6 +98,52 @@ export type ImageOverlay = {
   positionY: number; // 0..1, center-anchored
   width: number; // 0..1 fraction of video width
   opacity: number; // 0..1
+  // Time range during which the overlay is visible. Image overlays default
+  // to spanning the whole video but can be trimmed on the timeline. Burn-in
+  // wraps the overlay filter in `enable='between(t,start,end)'` and the DOM
+  // preview hides the <img> outside this range.
+  start: number; // seconds
+  end: number; // seconds
+};
+
+// Free-form text overlays — independent of the auto-generated subtitle
+// blocks. They have their own time range, position, and look. Used for
+// titles, callouts, captions, etc. They burn into the same ASS file the
+// regular subtitles use, but each overlay defines its own ASS Style.
+export type TextOverlay = {
+  id: string;
+  text: string; // may contain \n
+  start: number; // seconds
+  end: number; // seconds
+  positionX: number; // 0..1 center-anchored
+  positionY: number; // 0..1 center-anchored
+  fontFamily: string;
+  fontSize: number; // px relative to video pixel height
+  fontWeight: number;
+  italic: boolean;
+  textColor: string;
+  textOutlineColor: string;
+  textOutlineWidth: number;
+  backgroundColor: string;
+  backgroundOpacity: number; // 0..1
+  backgroundPaddingX: number;
+  backgroundPaddingY: number;
+  backgroundRadius: number;
+  textAlign: 'left' | 'center' | 'right';
+  maxWidth: number; // 0..1
+};
+
+// A cut is a time range that is REMOVED from the source video at burn time.
+// Cuts are stored in original-video time. The burn pipeline turns them into
+// the inverse "keep ranges" via lib/cuts.ts and uses ffmpeg trim+concat to
+// stitch the kept segments together. Subtitle and text overlay timings are
+// remapped onto the post-cut timeline so they line up with the trimmed
+// video. Cuts are preview-aware (the timeline shows them in red) but the
+// preview itself does NOT skip them — they only affect the exported MP4.
+export type Cut = {
+  id: string;
+  start: number; // seconds, original video time
+  end: number; // seconds, original video time
 };
 
 // Safe-area overlays modelled after the UI chrome of vertical social apps.

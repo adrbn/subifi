@@ -16,8 +16,12 @@ import { Timeline } from '@/components/Timeline';
 import { StylePanel } from '@/components/StylePanel';
 import { PresetsBar } from '@/components/PresetsBar';
 import { ExportBar } from '@/components/ExportBar';
+import { TranslateBar } from '@/components/TranslateBar';
 import { TranscribeButton } from '@/components/TranscribeButton';
 import { ExportMp4Button } from '@/components/ExportMp4Button';
+import { FeedbackButton } from '@/components/FeedbackButton';
+import { MediaSidebar } from '@/components/MediaSidebar';
+import { OnboardingTour } from '@/components/OnboardingTour';
 import { Button } from '@/components/ui/button';
 
 // Clamp helpers for the draggable preview/bottom splitter (desktop only).
@@ -37,8 +41,24 @@ const PREVIEW_PCT_STORAGE_KEY = 'subifi:previewPct';
 type MobileTab = 'subs' | 'style';
 
 export default function Page() {
-  const { videoUrl, clearVideo, status, progress, error, setStatus } =
-    useEditor();
+  const {
+    videoUrl,
+    clearVideo,
+    status,
+    progress,
+    error,
+    setStatus,
+    undo,
+    redo,
+    past,
+    future,
+    blocks,
+  } = useEditor();
+  const canUndo = past.length > 0;
+  const canRedo = future.length > 0;
+  // Tour readiness: a video is loaded AND we have at least one subtitle
+  // block, so all the data-tour anchors actually exist in the DOM.
+  const tourReady = Boolean(videoUrl) && blocks.length > 0;
 
   const leftColRef = useRef<HTMLDivElement>(null);
   const [previewPct, setPreviewPct] = useState<number>(PREVIEW_PCT_DEFAULT);
@@ -136,7 +156,12 @@ export default function Page() {
           customFonts: state.customFonts,
           overlays: state.overlays,
           selectedOverlayId: state.selectedOverlayId,
+          textOverlays: state.textOverlays,
+          selectedTextOverlayId: state.selectedTextOverlayId,
           safeZone: state.safeZone,
+          cuts: state.cuts,
+          subtitleTracks: state.subtitleTracks,
+          activeTrackId: state.activeTrackId,
         };
         void saveSession(snapshot);
       }, 800);
@@ -146,6 +171,36 @@ export default function Page() {
       unsub();
     };
   }, []);
+
+  // Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. We
+  // intentionally let plain Z reach textareas/inputs — only the modified
+  // shortcut is intercepted.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isMod = e.metaKey || e.ctrlKey;
+      if (!isMod) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (k === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+
+  // Auto-dismiss the session-restored banner after a few seconds. It's
+  // really only useful as a "hey, this isn't a fresh state" flash — once
+  // the user looks away, leaving it up clutters the header.
+  useEffect(() => {
+    if (!sessionRestored) return;
+    const id = window.setTimeout(() => setSessionRestored(false), 5000);
+    return () => window.clearTimeout(id);
+  }, [sessionRestored]);
 
   // "New video" wipes the in-memory state AND the persisted session, so the
   // dropzone comes back clean and a future reload doesn't resurrect the
@@ -188,9 +243,6 @@ export default function Page() {
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-bg-elev px-3 py-2 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
           <div className="text-sm font-semibold text-text">SubIFI</div>
-          <div className="hidden text-xs text-text-muted sm:block">
-            internal subtitle editor
-          </div>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {(status === 'extracting' ||
@@ -211,11 +263,66 @@ export default function Page() {
             </div>
           )}
           {videoUrl && (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canUndo}
+                onClick={undo}
+                title="Undo (⌘Z)"
+                aria-label="Undo"
+              >
+                {/* Curved arrow pointing left */}
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M9 14L4 9l5-5" />
+                  <path d="M4 9h11a5 5 0 0 1 0 10h-1" />
+                </svg>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canRedo}
+                onClick={redo}
+                title="Redo (⇧⌘Z)"
+                aria-label="Redo"
+              >
+                {/* Curved arrow pointing right — mirror of undo */}
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M15 14l5-5-5-5" />
+                  <path d="M20 9H9a5 5 0 0 0 0 10h1" />
+                </svg>
+              </Button>
+            </div>
+          )}
+          {videoUrl && (
             <Button variant="ghost" size="sm" onClick={onNewVideo}>
               <span className="hidden sm:inline">New video</span>
               <span className="sm:hidden">New</span>
             </Button>
           )}
+          <FeedbackButton />
           {videoUrl && <ExportMp4Button />}
         </div>
       </header>
@@ -262,9 +369,15 @@ export default function Page() {
           className="flex min-h-0 min-w-0 flex-1 flex-col"
         >
           {/* Preview area — splitter controls its height on desktop. On mobile
-              we use a clamped vh value so the video keeps a sensible size. */}
+              we use a clamped vh value so the video keeps a sensible size.
+              When a video is loaded we lay out a slim picto sidebar to the
+              left of the preview so "add text / add image" stay one click
+              away without cluttering the right-hand Style panel. */}
           <div
-            className="min-h-0 p-2 sm:p-3"
+            // `relative` is the anchor for MediaSidebar's overlay-mode
+            // (mobile + landscape video) which absolutely-positions the
+            // sidebar inside this container — see components/MediaSidebar.tsx.
+            className="relative flex min-h-0 gap-2 p-2 sm:p-3"
             style={
               videoUrl
                 ? isDesktop
@@ -276,7 +389,16 @@ export default function Page() {
                 : { flex: '1 1 0%' }
             }
           >
-            {videoUrl ? <VideoPreview /> : <Dropzone />}
+            {videoUrl ? (
+              <>
+                <MediaSidebar />
+                <div className="min-w-0 flex-1">
+                  <VideoPreview />
+                </div>
+              </>
+            ) : (
+              <Dropzone />
+            )}
           </div>
 
           {videoUrl && (
@@ -301,9 +423,10 @@ export default function Page() {
               {/* Transcribe gate — shown when audio is ready but blocks are empty */}
               <TranscribeButton />
 
-              {/* Presets + Export bars — tighter vertical rhythm on mobile */}
+              {/* Presets + Translate + Export bars — tighter vertical rhythm on mobile */}
               <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 sm:gap-2 sm:py-2">
                 <PresetsBar />
+                <TranslateBar />
                 <ExportBar />
               </div>
 
@@ -374,6 +497,11 @@ export default function Page() {
           </aside>
         )}
       </div>
+
+      {/* First-run onboarding overlay. Renders nothing if the user has
+          already seen it (localStorage flag) or if the editor isn't ready
+          yet. Mounted at the page root so it can spotlight any element. */}
+      <OnboardingTour ready={tourReady} />
     </div>
   );
 }

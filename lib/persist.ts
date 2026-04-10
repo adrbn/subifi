@@ -9,12 +9,15 @@
 // just don't get the auto-resume on reload.
 
 import type {
+  Cut,
   CustomFont,
   ImageOverlay,
   SafeZone,
   SegmentationConfig,
   Style,
   SubtitleBlock,
+  SubtitleTrack,
+  TextOverlay,
   Word,
 } from './types';
 
@@ -49,7 +52,13 @@ export type SessionSnapshot = {
   customFonts: CustomFont[];
   overlays: ImageOverlay[];
   selectedOverlayId: string | null;
+  textOverlays: TextOverlay[];
+  selectedTextOverlayId: string | null;
   safeZone: SafeZone;
+  // Optional for forward compat — older snapshots don't have these fields.
+  cuts?: Cut[];
+  subtitleTracks?: SubtitleTrack[];
+  activeTrackId?: string;
 };
 
 function isIdbAvailable(): boolean {

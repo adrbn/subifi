@@ -1,4 +1,4 @@
-import type { Style, SubtitleBlock } from './types';
+import type { Style, SubtitleBlock, TextOverlay } from './types';
 
 // Generates an ASS (Advanced SubStation Alpha) file from the project state.
 // The file is consumed by ffmpeg's `subtitles` filter (libass) during burn-in.
@@ -7,6 +7,12 @@ import type { Style, SubtitleBlock } from './types';
 // natively. When backgroundOpacity > 0 we use BorderStyle=3 (opaque box)
 // which has sharp corners. The DOM preview DOES show rounded corners; this
 // is a documented preview/export divergence for the MVP.
+//
+// Note on fonts: ffmpeg-wasm's libass build has no fontconfig but DOES scan
+// any directory passed via the subtitles filter's `fontsdir=` option. The
+// burn-in pipeline (lib/burn-in.ts) writes every needed TTF into that
+// directory before invoking ffmpeg, so the ASS file itself only needs to
+// reference fonts by family name — no [Fonts] section / UU-encoded body.
 
 function hexToAssColor(hex: string, alpha = 1): string {
   const h = hex.replace('#', '').padEnd(6, '0');
@@ -45,11 +51,66 @@ function alignmentNumber(textAlign: Style['textAlign']): number {
   return 5;
 }
 
+// Build a single ASS `Style:` line. Used for both the default subtitle
+// style and any per-block overrides — keeping this in one place avoids
+// drift between the two paths.
+function buildStyleLine(name: string, s: Style): string {
+  const hasBg = s.backgroundOpacity > 0;
+  const primary = hexToAssColor(s.textColor, 1);
+  // SecondaryColour drives the unspoken-word color in libass karaoke
+  // (\k tags). When karaoke is off it doesn't render so we can put any
+  // value, but we still emit the karaoke base color in case the user
+  // toggles karaoke on a per-block override.
+  const secondary = s.karaoke
+    ? hexToAssColor(s.karaokeBaseColor, 1)
+    : '&H000000FF';
+  const outlineCol = hasBg
+    ? hexToAssColor(s.backgroundColor, s.backgroundOpacity)
+    : hexToAssColor(s.textOutlineColor, 1);
+  const backCol = hasBg
+    ? hexToAssColor(s.backgroundColor, s.backgroundOpacity)
+    : hexToAssColor('#000000', 0);
+  const borderStyle = hasBg ? 3 : 1;
+  const outline = hasBg
+    ? Math.max(s.backgroundPaddingX, s.backgroundPaddingY)
+    : s.textOutlineWidth;
+  const bold = s.fontWeight >= 600 ? -1 : 0;
+  const italic = s.italic ? -1 : 0;
+  const align = alignmentNumber(s.textAlign);
+  // ASS Spacing is in pixels (per-pair extra space). Default to 0 for
+  // older snapshots that pre-date letterSpacing on Style.
+  const spacing = s.letterSpacing ?? 0;
+  return `Style: ${name},${s.fontFamily},${s.fontSize},${primary},${secondary},${outlineCol},${backCol},${bold},${italic},0,0,100,100,${spacing},0,${borderStyle},${outline},0,${align},10,10,10,1`;
+}
+
+// Build the karaoke-tagged dialogue text for a block. Each word becomes
+// `{\k<centiseconds>}<word>` so libass swaps SecondaryColour →
+// PrimaryColour as each word's time elapses. Returns null when the block
+// has no per-word timings (caller falls back to plain text).
+function buildKaraokeText(block: SubtitleBlock): string | null {
+  if (!block.words || block.words.length === 0) return null;
+  let cursor = block.start;
+  const parts: string[] = [];
+  for (const w of block.words) {
+    // Gap before this word (silence between words). Emit a 0-content \k
+    // so the highlight timer keeps advancing without highlighting anything.
+    const gap = Math.max(0, w.start - cursor);
+    if (gap > 0) parts.push(`{\\k${Math.round(gap * 100)}}`);
+    const dur = Math.max(1, Math.round((w.end - w.start) * 100));
+    // Escape each word individually — \\N for newlines, \\{ \\} for braces.
+    const safe = escapeAssText(w.text);
+    parts.push(`{\\k${dur}}${safe} `);
+    cursor = w.end;
+  }
+  return parts.join('').trimEnd();
+}
+
 export type AssGenInput = {
   blocks: SubtitleBlock[];
   style: Style;
   videoWidth: number;
   videoHeight: number;
+  textOverlays?: TextOverlay[];
 };
 
 export function generateAss({
@@ -57,26 +118,54 @@ export function generateAss({
   style,
   videoWidth,
   videoHeight,
+  textOverlays = [],
 }: AssGenInput): string {
-  const hasBg = style.backgroundOpacity > 0;
-  const primaryColour = hexToAssColor(style.textColor, 1);
-  const outlineColour = hasBg
-    ? hexToAssColor(style.backgroundColor, style.backgroundOpacity)
-    : hexToAssColor(style.textOutlineColor, 1);
-  const backColour = hasBg
-    ? hexToAssColor(style.backgroundColor, style.backgroundOpacity)
-    : hexToAssColor('#000000', 0);
-  const borderStyle = hasBg ? 3 : 1;
-  const outline = hasBg
-    ? Math.max(style.backgroundPaddingX, style.backgroundPaddingY)
-    : style.textOutlineWidth;
-  const shadow = 0;
-  const alignment = alignmentNumber(style.textAlign);
-  const bold = style.fontWeight >= 600 ? -1 : 0;
-  const italic = style.italic ? -1 : 0;
-  // ASS fontname — if it's a Google Font or uploaded font, the family name
-  // is what libass looks up in the fontsdir.
-  const fontname = style.fontFamily;
+  // Per-block override styles. Block i with an override gets style "B{i}"
+  // built by merging the override over the global style. Blocks without
+  // overrides reference "Default".
+  const blockStyleLines = blocks
+    .map((b, i) => {
+      if (!b.styleOverride || Object.keys(b.styleOverride).length === 0) {
+        return null;
+      }
+      const merged: Style = { ...style, ...b.styleOverride };
+      return buildStyleLine(`B${i}`, merged);
+    })
+    .filter((line): line is string => line !== null);
+
+  // Each text overlay also gets its own style. We treat TextOverlay as a
+  // Style-shaped record by mapping the (compatible) fields onto a Style.
+  const overlayStyleLines = textOverlays.map((t, i) => {
+    const asStyle: Style = {
+      fontFamily: t.fontFamily,
+      fontSize: t.fontSize,
+      fontWeight: t.fontWeight,
+      italic: t.italic,
+      textColor: t.textColor,
+      textOutlineColor: t.textOutlineColor,
+      textOutlineWidth: t.textOutlineWidth,
+      backgroundColor: t.backgroundColor,
+      backgroundOpacity: t.backgroundOpacity,
+      backgroundPaddingX: t.backgroundPaddingX,
+      backgroundPaddingY: t.backgroundPaddingY,
+      backgroundRadius: t.backgroundRadius,
+      positionX: t.positionX,
+      positionY: t.positionY,
+      maxWidth: t.maxWidth,
+      textAlign: t.textAlign,
+      // TextOverlay doesn't yet expose line height / letter spacing, so
+      // we keep them at the global Style defaults. Adding them on the
+      // overlay would mean threading two more sliders into the StylePanel
+      // for every overlay row — out of scope for this iteration.
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      // Text overlays don't currently expose karaoke (no per-word
+      // timings on free-form text), so we hard-code them off here.
+      karaoke: false,
+      karaokeBaseColor: '#94a3b8',
+    };
+    return buildStyleLine(`TO${i}`, asStyle);
+  });
 
   const header = [
     '[Script Info]',
@@ -90,26 +179,47 @@ export function generateAss({
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Default,${fontname},${style.fontSize},${primaryColour},&H000000FF,${outlineColour},${backColour},${bold},${italic},0,0,100,100,0,0,${borderStyle},${outline},${shadow},${alignment},10,10,10,1`,
+    buildStyleLine('Default', style),
+    ...blockStyleLines,
+    ...overlayStyleLines,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
 
-  const posX = Math.round(style.positionX * videoWidth);
-  const posY = Math.round(style.positionY * videoHeight);
-
-  const events = blocks.map((b) => {
+  const events = blocks.map((b, i) => {
     const start = formatAssTimestamp(b.start);
     const end = formatAssTimestamp(b.end);
-    const text = escapeAssText(b.text);
-    // {\pos(x,y)} positions the anchor point of the textbox absolutely.
-    // Anchor depends on the Alignment set in the Default style (4/5/6 →
-    // middle-left/center/right). This lets positionX/Y drive where the
-    // subtitle lands regardless of the video resolution.
+    // Resolve which Style entry this block uses. Per-block overrides also
+    // need their own positionX/Y because that lives on Style too.
+    const merged: Style = b.styleOverride
+      ? { ...style, ...b.styleOverride }
+      : style;
+    const styleName =
+      b.styleOverride && Object.keys(b.styleOverride).length > 0
+        ? `B${i}`
+        : 'Default';
+    const posX = Math.round(merged.positionX * videoWidth);
+    const posY = Math.round(merged.positionY * videoHeight);
     const inline = `{\\pos(${posX},${posY})}`;
-    return `Dialogue: 0,${start},${end},Default,,0,0,0,,${inline}${text}`;
+    // Pick karaoke text only when both the merged style asks for it AND
+    // the block actually has word-level timings to drive the highlight.
+    const karaokeText = merged.karaoke ? buildKaraokeText(b) : null;
+    const text = karaokeText ?? escapeAssText(b.text);
+    return `Dialogue: 0,${start},${end},${styleName},,0,0,0,,${inline}${text}`;
   });
 
-  return [...header, ...events, ''].join('\n');
+  // Text overlays are layer 1 so they sit on top of the subtitle layer if
+  // they ever overlap visually.
+  const overlayEvents = textOverlays.map((t, i) => {
+    const start = formatAssTimestamp(t.start);
+    const end = formatAssTimestamp(t.end);
+    const text = escapeAssText(t.text);
+    const tx = Math.round(t.positionX * videoWidth);
+    const ty = Math.round(t.positionY * videoHeight);
+    const inline = `{\\pos(${tx},${ty})}`;
+    return `Dialogue: 1,${start},${end},TO${i},,0,0,0,,${inline}${text}`;
+  });
+
+  return [...header, ...events, ...overlayEvents, ''].join('\n');
 }

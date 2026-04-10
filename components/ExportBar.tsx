@@ -16,7 +16,7 @@ export function ExportBar() {
     // on sm+. Label is mobile-hidden because SRT/VTT/TXT/JSON are already
     // self-describing.
     <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 sm:mx-0 sm:flex-wrap sm:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      <span className="shrink-0 text-xs uppercase tracking-wider text-text-muted">
+      <span className="w-20 shrink-0 text-xs uppercase tracking-wider text-text-muted">
         Export
       </span>
       <Button

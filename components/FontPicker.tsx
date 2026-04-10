@@ -40,9 +40,31 @@ function injectCustomFont(font: CustomFont) {
   document.head.appendChild(style);
 }
 
-export function FontPicker() {
+// FontPicker drives either the global subtitle style (default) or any other
+// font field (text overlays, per-block overrides…). When `value` and
+// `onChange` are provided, the picker becomes a controlled component and
+// stops touching the editor store. The "+ upload" path still adds the new
+// font to the store-level customFonts list (so it's available everywhere)
+// but assigns it to the controlled target instead of the global style.
+type FontPickerProps = {
+  value?: { family: string; weight: number };
+  onChange?: (family: string) => void;
+  // When true, omit the wrapper label so the picker fits inline in
+  // sub-panels (text overlay rows) without duplicating the section heading.
+  compact?: boolean;
+};
+
+export function FontPicker({ value, onChange, compact = false }: FontPickerProps) {
   const { style, setStyle, addCustomFont, customFonts } = useEditor();
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Resolve the active family/weight: controlled value wins over store.
+  const family = value?.family ?? style.fontFamily;
+  const weight = value?.weight ?? style.fontWeight;
+  const setFamily = (next: string) => {
+    if (onChange) onChange(next);
+    else setStyle({ fontFamily: next });
+  };
 
   // Re-inject custom fonts whenever the list changes (handles hot reload in
   // dev). The injection itself is idempotent.
@@ -53,10 +75,10 @@ export function FontPicker() {
   // Preload the currently-selected Google Font so the preview shows it
   // immediately even before the user clicks anything in the preset list.
   useEffect(() => {
-    if (GOOGLE_FONTS.includes(style.fontFamily)) {
-      loadGoogleFont(style.fontFamily, style.fontWeight);
+    if (GOOGLE_FONTS.includes(family)) {
+      loadGoogleFont(family, weight);
     }
-  }, [style.fontFamily, style.fontWeight]);
+  }, [family, weight]);
 
   const onUpload = async (file: File) => {
     const buffer = await file.arrayBuffer();
@@ -68,7 +90,7 @@ export function FontPicker() {
     const font: CustomFont = { name, dataUrl, buffer, format };
     addCustomFont(font);
     injectCustomFont(font);
-    setStyle({ fontFamily: name });
+    setFamily(name);
   };
 
   const allFamilies = [
@@ -78,14 +100,14 @@ export function FontPicker() {
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-xs text-text-muted">Font family</label>
+      {!compact && <label className="text-xs text-text-muted">Font family</label>}
       <div className="flex gap-2">
         <Select
-          value={style.fontFamily}
+          value={family}
           onChange={(e) => {
-            const family = e.target.value;
-            setStyle({ fontFamily: family });
-            if (GOOGLE_FONTS.includes(family)) loadGoogleFont(family, style.fontWeight);
+            const next = e.target.value;
+            setFamily(next);
+            if (GOOGLE_FONTS.includes(next)) loadGoogleFont(next, weight);
           }}
         >
           {customFonts.length > 0 && (
