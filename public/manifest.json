@@ -1,0 +1,21 @@
+{
+  "name": "SubIFI",
+  "short_name": "SubIFI",
+  "description": "Video subtitle editor — transcribe, edit, style, export",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0b10",
+  "theme_color": "#6366f1",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

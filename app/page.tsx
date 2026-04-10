@@ -457,12 +457,7 @@ export default function Page() {
               {/* Transcribe gate — shown when audio is ready but blocks are empty */}
               <TranscribeButton />
 
-              {/* Desktop: bars above the timeline+subs row */}
-              <div className="hidden shrink-0 flex-col gap-1.5 border-b border-border bg-bg-elev px-3 py-1.5 sm:gap-2 sm:py-2 md:flex">
-                <PresetsBar />
-                <TranslateBar />
-                <ExportBar />
-              </div>
+              {/* Desktop bars moved inside the timeline pane below */}
 
               {/* Mobile transport bar: play/pause + time + undo/redo */}
               <div className="flex shrink-0 items-center justify-between border-b border-border bg-bg-elev px-2 py-1 md:hidden">
@@ -544,12 +539,19 @@ export default function Page() {
                 ref={bottomRowRef}
                 className="hidden min-h-0 flex-1 md:flex"
               >
-                {/* Timeline pane */}
+                {/* Timeline pane — bars + timeline stacked */}
                 <div
-                  className="min-h-0 min-w-0 overflow-auto border-r border-border bg-bg-elev px-3 py-2"
+                  className="flex min-h-0 min-w-0 flex-col border-r border-border bg-bg-elev"
                   style={{ width: `${timelinePct}%`, flex: 'none' }}
                 >
-                  <Timeline />
+                  <div className="shrink-0 flex flex-col gap-1.5 border-b border-border px-3 py-1.5">
+                    <PresetsBar />
+                    <TranslateBar />
+                    <ExportBar />
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+                    <Timeline />
+                  </div>
                 </div>
                 {/* Vertical splitter */}
                 <div

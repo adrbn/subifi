@@ -129,18 +129,18 @@ export function Dropzone() {
       onDrop={onDrop}
       onClick={() => inputRef.current?.click()}
       className={clsx(
-        'flex h-full w-full cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed p-10 text-center transition-colors',
+        'flex h-full w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 text-center transition-colors',
         dragging
           ? 'border-accent bg-accent/5'
           : 'border-border hover:border-border-hi hover:bg-bg-hi',
       )}
     >
-      <div className="text-4xl">🎬</div>
-      <div className="text-lg font-semibold text-text">
-        Drop a video or an .srt / .vtt here
+      <div className="text-2xl">🎬</div>
+      <div className="text-sm font-semibold text-text">
+        Drop a video or .srt / .vtt
       </div>
-      <div className="text-sm text-text-muted">
-        or click to browse — MP4, MOV, MKV, WebM, AVI, up to ~5 min / 200 MB
+      <div className="text-xs text-text-muted">
+        Click to browse — MP4, MOV, MKV, WebM
       </div>
       {status !== 'idle' && status !== 'ready' && status !== 'audio-ready' && (
         <div className="mt-3 text-sm text-accent">
