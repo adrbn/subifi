@@ -59,6 +59,9 @@ export type Style = {
   // Extra space between letters, in pixels (positive or negative). Maps
   // 1:1 to ASS `Spacing` / inline `\fsp` so the burn matches the preview.
   letterSpacing: number;
+  // Extra space between words, in pixels. CSS `word-spacing` in preview;
+  // emulated via `\fsp` reset trick or space-padding in ASS burn.
+  wordSpacing: number;
   // Karaoke / word-pop: highlight the currently-spoken word in real time.
   // Requires word-level timings (block.words). When off, the block renders
   // as a single styled string and karaokeBaseColor is ignored.

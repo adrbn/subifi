@@ -142,6 +142,7 @@ function subtitleStyle(
     textShadow,
     lineHeight: style.lineHeight ?? 1.2,
     letterSpacing: `${(style.letterSpacing ?? 0) * scale}px`,
+    wordSpacing: `${(style.wordSpacing ?? 0) * scale}px`,
     whiteSpace: 'pre-wrap',
     pointerEvents: 'auto',
     userSelect: 'none',

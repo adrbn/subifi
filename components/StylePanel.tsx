@@ -163,6 +163,14 @@ export function StylePanel() {
         unit="px"
         onChange={(v) => setStyle({ letterSpacing: v })}
       />
+      <Slider
+        label="Word spacing"
+        min={-5}
+        max={30}
+        value={style.wordSpacing ?? 0}
+        unit="px"
+        onChange={(v) => setStyle({ wordSpacing: v })}
+      />
 
       <hr className="border-border" />
 

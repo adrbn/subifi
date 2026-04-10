@@ -159,6 +159,7 @@ export function generateAss({
       // for every overlay row — out of scope for this iteration.
       lineHeight: 1.2,
       letterSpacing: 0,
+      wordSpacing: 0,
       // Text overlays don't currently expose karaoke (no per-word
       // timings on free-form text), so we hard-code them off here.
       karaoke: false,
@@ -205,7 +206,14 @@ export function generateAss({
     // Pick karaoke text only when both the merged style asks for it AND
     // the block actually has word-level timings to drive the highlight.
     const karaokeText = merged.karaoke ? buildKaraokeText(b) : null;
-    const text = karaokeText ?? escapeAssText(b.text);
+    let text = karaokeText ?? escapeAssText(b.text);
+    // Emulate word spacing in ASS: temporarily bump letter spacing for
+    // each space character via inline \fsp overrides.
+    const ws = merged.wordSpacing ?? 0;
+    if (ws !== 0 && !karaokeText) {
+      const ls = merged.letterSpacing ?? 0;
+      text = text.replace(/ /g, `{\\fsp${ls + ws}} {\\fsp${ls}}`);
+    }
     return `Dialogue: 0,${start},${end},${styleName},,0,0,0,,${inline}${text}`;
   });
 

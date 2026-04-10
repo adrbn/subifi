@@ -30,6 +30,7 @@ const baseStyle: Style = {
   textAlign: 'center',
   lineHeight: 1.2,
   letterSpacing: 0,
+  wordSpacing: 0,
   karaoke: false,
   karaokeBaseColor: '#94a3b8', // slate-400 — neutral dim
 };
