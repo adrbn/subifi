@@ -389,7 +389,17 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   updateBlock: (id, patch) =>
     set((s) => {
-      const newBlocks = s.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b));
+      const newBlocks = s.blocks.map((b) => {
+        if (b.id !== id) return b;
+        const updated = { ...b, ...patch };
+        // When the text is manually edited, the word-level timing data no
+        // longer matches — clear it so the preview falls back to rendering
+        // blk.text instead of the stale karaoke word array.
+        if ('text' in patch && patch.text !== b.text && updated.words) {
+          updated.words = undefined;
+        }
+        return updated;
+      });
       return {
         ...pushHistory(s),
         blocks: newBlocks,
