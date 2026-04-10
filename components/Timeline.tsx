@@ -525,7 +525,7 @@ export function Timeline() {
         </div>
       </div>
       {/* Eye toggles + lane labels — sits to the left of the scroll area */}
-      <div className="flex gap-0">
+      <div className="flex min-h-0 flex-1 gap-0">
       <div className="flex flex-col gap-0 pt-0 shrink-0 w-20 border-r border-border bg-bg-elev rounded-l-md text-[9px]">
         {subtitleTracks.map((track) => (
           <div

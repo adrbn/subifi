@@ -194,14 +194,34 @@ function extForMime(mime: string): string {
   return 'png';
 }
 
+// Decode a data-URL image to raw RGBA pixels using OffscreenCanvas. This
+// lets us feed images to ffmpeg as rawvideo, completely sidestepping the
+// PNG/JPEG decoder threading issues that cause deadlocks in ffmpeg-wasm.
+async function decodeImageToRGBA(dataUrl: string): Promise<{
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+}> {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const bitmap = await createImageBitmap(blob);
+  const { width, height } = bitmap;
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(bitmap, 0, 0);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  bitmap.close();
+  return { rgba: new Uint8Array(imageData.data.buffer), width, height };
+}
+
+type OverlayMeta = { name: string; width: number; height: number };
+
 // Build the ffmpeg filter_complex string that chains the subtitle burn with
-// N image overlays. Instead of separate `-i` inputs (which deadlock in
-// ffmpeg-wasm's threading model), each overlay is loaded via the `movie`
-// source filter inside the filter graph. This keeps ffmpeg at a single
-// input, sidestepping the multi-input frame-scheduling bug entirely.
+// N image overlays. Each overlay is a rawvideo input (pre-decoded in JS) so
+// we avoid PNG/JPEG decoding inside ffmpeg-wasm's broken threading model.
 function buildOverlayComplex(
   overlays: ImageOverlay[],
-  overlayNames: string[],
+  overlayMetas: OverlayMeta[],
   subsFilter: string,
   effectiveWidth: number,
   videoSource: string,
@@ -209,18 +229,17 @@ function buildOverlayComplex(
 ): string {
   const parts: string[] = [`${videoSource}${subsFilter}[v0]`];
   overlays.forEach((ov, i) => {
+    const inputIdx = i + 1;
     const scaleW = Math.max(1, Math.round(effectiveWidth * ov.width));
     const alpha = Math.max(0, Math.min(1, ov.opacity));
     const alphaExpr =
       alpha < 0.999
-        ? `,format=rgba,colorchannelmixer=aa=${alpha.toFixed(3)}`
-        : ',format=rgba';
-    // `movie` loads the image inside the filter graph (no extra -i input).
-    // `loop=0` + `setpts=N/FRAME_RATE/TB` turns the single frame into a
-    // continuous stream at the video's frame rate.
-    parts.push(
-      `movie=${overlayNames[i]}:loop=0,setpts=N/FRAME_RATE/TB,scale=${scaleW}:-1${alphaExpr}[img${i}]`,
-    );
+        ? `,colorchannelmixer=aa=${alpha.toFixed(3)}`
+        : '';
+    // The rawvideo input is already RGBA. Scale to target width, apply
+    // alpha if needed. No loop/movie filter required — the input is
+    // looped at the demuxer level via -stream_loop.
+    parts.push(`[${inputIdx}:v]scale=${scaleW}:-1${alphaExpr}[img${i}]`);
 
     const posX = `(main_w*${ov.positionX.toFixed(4)})-(overlay_w/2)`;
     const posY = `(main_h*${ov.positionY.toFixed(4)})-(overlay_h/2)`;
@@ -562,16 +581,18 @@ export async function burnSubtitles(
     }
     await ff.writeFile(subsName, new TextEncoder().encode(assContent));
 
-    // Write each image overlay to the ffmpeg FS so we can reference it as
-    // a separate input. We use `effectiveOverlays` here because cut-driven
-    // remapping may have split a single overlay into multiple time
-    // fragments — each fragment is its own ffmpeg input so the input
-    // indices in buildOverlayComplex line up.
+    // Decode each image overlay to raw RGBA pixels in JavaScript and write
+    // them as rawvideo files. This completely avoids PNG/JPEG decoding
+    // inside ffmpeg-wasm, which deadlocks due to threading issues.
+    const overlayMetas: OverlayMeta[] = [];
     for (let i = 0; i < effectiveOverlays.length; i++) {
       const ov = effectiveOverlays[i];
-      const name = `overlay_${i}.${extForMime(ov.mime)}`;
-      await ff.writeFile(name, dataUrlToBytes(ov.dataUrl));
+      const decoded = await decodeImageToRGBA(ov.dataUrl);
+      const name = `overlay_${i}.raw`;
+      await ff.writeFile(name, decoded.rgba);
       overlayNames.push(name);
+      overlayMetas.push({ name, width: decoded.width, height: decoded.height });
+      console.debug(`[burn] decoded overlay ${i} to raw RGBA: ${decoded.width}x${decoded.height} (${decoded.rgba.byteLength} bytes)`);
     }
 
     // Auto-cap export resolution to 1080p on the short side. This is the
@@ -644,7 +665,7 @@ export async function burnSubtitles(
         filterParts.push(
           buildOverlayComplex(
             effectiveOverlays,
-            overlayNames,
+            overlayMetas,
             subsFilter,
             effectiveWidth,
             vSource,
@@ -667,9 +688,19 @@ export async function burnSubtitles(
           ? `[v${effectiveOverlays.length}]`
           : '[vout]';
       const args: string[] = ['-i', inputName];
-      // Image overlays are loaded via `movie` source filter inside the
-      // filter_complex — no extra `-i` inputs needed. This avoids the
-      // multi-input frame-scheduling deadlock in ffmpeg-wasm.
+      // Each overlay is a raw RGBA file looped via -stream_loop. Using
+      // rawvideo avoids the PNG decoder and the associated threading
+      // deadlock in ffmpeg-wasm.
+      for (const meta of overlayMetas) {
+        args.push(
+          '-stream_loop', '-1',
+          '-f', 'rawvideo',
+          '-pixel_format', 'rgba',
+          '-video_size', `${meta.width}x${meta.height}`,
+          '-framerate', '25',
+          '-i', meta.name,
+        );
+      }
       args.push(
         '-filter_complex',
         fullComplex,

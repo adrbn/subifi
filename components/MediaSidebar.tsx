@@ -45,7 +45,7 @@ export function MediaSidebar() {
   // layout for square / unknown sizes since those still leave usable
   // horizontal room next to the preview.
   const isLandscape = videoWidth > 0 && videoHeight > 0 && videoWidth > videoHeight;
-  const overlayMode = isMobile && isLandscape;
+  const overlayMode = isMobile;
 
   const onAddText = () => {
     const id = addTextOverlay();

@@ -105,7 +105,7 @@ export function SubtitleList() {
               }}
               onClick={() => selectBlock(b.id)}
               className={clsx(
-                'flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg-elev px-2 py-2 transition-colors',
+                'cursor-pointer rounded-md border border-border bg-bg-elev px-2 py-1.5 transition-colors',
                 isActive && !isSelected && 'border-accent/60 bg-accent/5',
                 // Selection wins over "active" so the user can clearly see
                 // which entry is currently the focus target regardless of
@@ -114,14 +114,7 @@ export function SubtitleList() {
                 isFlash && 'border-amber-400 ring-1 ring-amber-400/60',
               )}
             >
-              <button
-                className="shrink-0 rounded bg-bg-hi px-2 py-1 text-xs font-mono text-text-muted hover:bg-border"
-                onClick={() => scrubTo(b.start)}
-                title="Jump to this subtitle"
-              >
-                {fmt(b.start)}
-              </button>
-              <div className="flex flex-1 flex-col gap-1">
+              <div className="flex flex-col gap-1">
                 <textarea
                   ref={(el) => {
                     if (el) textareaRefs.current[b.id] = el;
@@ -129,9 +122,6 @@ export function SubtitleList() {
                   value={b.text}
                   onChange={(e) => updateBlock(b.id, { text: e.target.value })}
                   onKeyDown={(e) => {
-                    // Shift+Enter: split the block at the caret position,
-                    // like Capcut. Everything after the caret moves to a
-                    // new block starting at the closest word timing.
                     if (e.key === 'Enter' && e.shiftKey) {
                       e.preventDefault();
                       const ta = e.currentTarget;
@@ -142,10 +132,10 @@ export function SubtitleList() {
                     }
                   }}
                   rows={Math.max(1, b.text.split('\n').length)}
-                  className="w-full resize-none rounded bg-transparent px-1 py-0.5 text-sm text-text outline-none focus:bg-bg-hi"
+                  className="w-full resize-none rounded bg-transparent px-1 py-0.5 text-sm font-semibold text-text outline-none focus:bg-bg-hi"
                   title="Shift+Enter: split at cursor"
                 />
-                <div className="flex items-center gap-2 text-xs text-text-muted">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
                   <label className="flex items-center gap-1">
                     <span>start</span>
                     <input
@@ -170,7 +160,7 @@ export function SubtitleList() {
                       className="w-16 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
                     />
                   </label>
-                  <div className="ml-auto flex gap-1">
+                  <div className="flex gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
