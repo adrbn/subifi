@@ -45,7 +45,9 @@ export function MediaSidebar() {
   // layout for square / unknown sizes since those still leave usable
   // horizontal room next to the preview.
   const isLandscape = videoWidth > 0 && videoHeight > 0 && videoWidth > videoHeight;
-  const overlayMode = isMobile;
+  // On mobile: horizontal bar ABOVE the video (not overlaying it).
+  // On desktop: vertical sidebar to the left of the video.
+  const horizontal = isMobile;
 
   const onAddText = () => {
     const id = addTextOverlay();
@@ -76,13 +78,12 @@ export function MediaSidebar() {
     <div
       data-tour="media-sidebar"
       className={clsx(
-        'shrink-0 rounded-md border border-border p-1',
-        overlayMode
-          ? // Floating horizontal pill over the top-center of the preview.
-            // bg-elev/85 + backdrop-blur keeps the buttons readable without
-            // hiding the video underneath.
-            'absolute left-1/2 top-3 z-20 flex -translate-x-1/2 flex-row items-center gap-1 bg-bg-elev/85 backdrop-blur-sm'
-          : 'flex flex-col items-center gap-1 self-start bg-bg-elev',
+        'rounded-md border border-border p-1',
+        horizontal
+          ? // Pinned to the left edge of the preview container via absolute
+            // positioning so it does NOT push the video off-center.
+            'absolute left-2 top-2 z-20 flex flex-col items-center gap-1 bg-bg-elev/85 backdrop-blur-sm'
+          : 'shrink-0 flex flex-col items-center gap-1 self-start bg-bg-elev',
       )}
     >
       <button
