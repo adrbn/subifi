@@ -850,10 +850,16 @@ async function burnSubtitlesCore(
       // alone works (confirmed by "Loading font file" in libass stderr).
     });
     const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
+    // Show enough of the ASS to verify Style lines + first Dialogues.
+    const styleLines = assContent.split('\n').filter(l => l.startsWith('Style:'));
+    const firstDialogues = assContent.split('\n').filter(l => l.startsWith('Dialogue:')).slice(0, 4);
     console.debug('[burn] ass file generated', {
       bytes: assContent.length,
       dialogueLines: dialogueCount,
-      head: assContent.slice(0, 500),
+      playRes: `${videoWidth}x${videoHeight}`,
+      fontSize: style.fontSize,
+      styles: styleLines,
+      sampleDialogues: firstDialogues,
     });
     if (dialogueCount === 0) {
       throw new Error(

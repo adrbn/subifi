@@ -409,7 +409,9 @@ export function generateAss({
       events.push(`Dialogue: 0,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
 
       // Layer 1: text with outline only (no background box).
-      const txtInline = `{\\pos(${posX},${posY})}`;
+      // Explicit \fs ensures libass uses the intended size regardless of
+      // style resolution or font-metric quirks.
+      const txtInline = `{\\pos(${posX},${posY})\\fs${merged.fontSize}}`;
       events.push(`Dialogue: 1,${start},${end},${txtStyleName},,0,0,0,,${txtInline}${text}`);
     } else {
       // --- Single-layer (no radius or no metrics) ---
@@ -418,7 +420,7 @@ export function generateAss({
       const bordOverrides = hasBg
         ? `\\xbord${merged.backgroundPaddingX}\\ybord${merged.backgroundPaddingY}`
         : '';
-      const inline = `{\\pos(${posX},${posY})${bordOverrides}}`;
+      const inline = `{\\pos(${posX},${posY})\\fs${merged.fontSize}${bordOverrides}}`;
       events.push(`Dialogue: 0,${start},${end},${styleName},,0,0,0,,${inline}${text}`);
     }
   });
@@ -462,13 +464,13 @@ export function generateAss({
         `\\1a&H${bgAlpha}&` +
         `\\bord0\\shad0\\p1}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
-      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${tx},${ty})}${text}`);
+      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${tx},${ty})\\fs${t.fontSize}}${text}`);
     } else {
       const hasBg = t.backgroundOpacity > 0;
       const bordOverrides = hasBg
         ? `\\xbord${t.backgroundPaddingX}\\ybord${t.backgroundPaddingY}`
         : '';
-      const inline = `{\\pos(${tx},${ty})${bordOverrides}}`;
+      const inline = `{\\pos(${tx},${ty})\\fs${t.fontSize}${bordOverrides}}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},TO${i},,0,0,0,,${inline}${text}`);
     }
   });
