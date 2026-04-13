@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { DEFAULT_STYLE, SEGMENTATION_PRESETS, STYLE_PRESETS } from '@/lib/presets';
 import {
@@ -9,6 +9,8 @@ import {
   removeUserPreset,
   type UserStylePreset,
 } from '@/lib/user-presets';
+import { exportStyles, parseStyleFile } from '@/lib/style-file';
+import { downloadBlob } from '@/lib/download';
 import { Button } from './ui/button';
 
 export function PresetsBar() {
@@ -20,6 +22,21 @@ export function PresetsBar() {
   useEffect(() => {
     setUserPresets(loadUserPresets());
   }, []);
+
+  const styleInputRef = useRef<HTMLInputElement>(null);
+
+  const onImportStyles = async (file: File) => {
+    try {
+      const json = await file.text();
+      const entries = parseStyleFile(json);
+      for (const entry of entries) {
+        addUserPreset(entry.label, entry.style);
+      }
+      setUserPresets(loadUserPresets());
+    } catch (err) {
+      alert(`Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`);
+    }
+  };
 
   const onSaveCurrent = () => {
     // window.prompt is intentional — small modal-free UX for a feature that
@@ -92,6 +109,40 @@ export function PresetsBar() {
         >
           + Save
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
+          disabled={userPresets.length === 0}
+          onClick={() => {
+            if (userPresets.length === 0) return;
+            const json = exportStyles(userPresets);
+            downloadBlob(json, 'styles.subifi-styles.json', 'application/json');
+          }}
+          title="Export all saved presets as a file"
+        >
+          Export
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
+          onClick={() => styleInputRef.current?.click()}
+          title="Import presets from a file"
+        >
+          Import
+        </Button>
+        <input
+          ref={styleInputRef}
+          type="file"
+          accept=".json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void onImportStyles(file);
+            e.target.value = '';
+          }}
+        />
       </div>
       <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 sm:mx-0 sm:flex-wrap sm:px-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <span className="w-20 shrink-0 text-xs uppercase tracking-wider text-text-muted">
