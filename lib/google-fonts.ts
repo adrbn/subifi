@@ -3,6 +3,7 @@
 // families cover every reasonable use case and keep the picker browseable.
 
 export const GOOGLE_FONTS: string[] = [
+  // ── Sans-Serif ──────────────────────────────────────────────
   'Inter',
   'Roboto',
   'Open Sans',
@@ -13,9 +14,6 @@ export const GOOGLE_FONTS: string[] = [
   'Raleway',
   'Ubuntu',
   'Nunito',
-  'Playfair Display',
-  'Bebas Neue',
-  'Anton',
   'DM Sans',
   'Work Sans',
   'Archivo',
@@ -33,6 +31,68 @@ export const GOOGLE_FONTS: string[] = [
   'Cabin',
   'Titillium Web',
   'Kanit',
+  'Lexend',
+  'Outfit',
+  'Plus Jakarta Sans',
+  'Sora',
+  'Urbanist',
+  'Figtree',
+  'Geist',
+  'Red Hat Display',
+  'Quicksand',
+  'Comfortaa',
+  'Exo 2',
+  'Overpass',
+  'Albert Sans',
+
+  // ── Serif ───────────────────────────────────────────────────
+  'Playfair Display',
+  'Lora',
+  'Merriweather',
+  'PT Serif',
+  'Libre Baskerville',
+  'Source Serif 4',
+  'Crimson Text',
+  'EB Garamond',
+  'Bitter',
+  'DM Serif Display',
+  'Cormorant Garamond',
+
+  // ── Display / Impact ────────────────────────────────────────
+  'Bebas Neue',
+  'Anton',
+  'Permanent Marker',
+  'Righteous',
+  'Bungee',
+  'Orbitron',
+  'Press Start 2P',
+  'Monoton',
+  'Silkscreen',
+  'Russo One',
+  'Black Ops One',
+  'Bangers',
+  'Passion One',
+  'Teko',
+  'Chakra Petch',
+
+  // ── Handwriting / Script ────────────────────────────────────
+  'Dancing Script',
+  'Pacifico',
+  'Caveat',
+  'Satisfy',
+  'Great Vibes',
+  'Sacramento',
+  'Lobster',
+  'Kalam',
+  'Patrick Hand',
+  'Indie Flower',
+
+  // ── Monospace ───────────────────────────────────────────────
+  'Fira Code',
+  'JetBrains Mono',
+  'Source Code Pro',
+  'IBM Plex Mono',
+  'Space Mono',
 ];
 
 // Inject a <link rel="stylesheet"> for a Google Font family so that the DOM
