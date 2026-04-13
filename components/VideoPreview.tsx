@@ -145,6 +145,7 @@ function subtitleStyle(
     letterSpacing: `${(style.letterSpacing ?? 0) * scale}px`,
     wordSpacing: `${(style.wordSpacing ?? 0) * scale}px`,
     whiteSpace: 'pre-wrap',
+    textWrap: 'balance' as unknown as string,
     pointerEvents: 'auto',
     userSelect: 'none',
     cursor: dragging ? 'grabbing' : 'grab',
@@ -261,7 +262,7 @@ export function VideoPreview() {
     selectedBlockId,
     selectBlock,
     updateBlock,
-    visibleBlocks,
+    subtitleTracks,
   } = useEditor();
   const [t, setT] = useState(0);
   const [scale, setScale] = useState(1);
@@ -503,8 +504,17 @@ export function VideoPreview() {
   }, [videoWidth, videoHeight, videoUrl]);
 
   // Show blocks from all visible tracks, not just the active one.
-  const allVisibleBlocks = visibleBlocks();
-  const currentBlocks = activeBlocks(allVisibleBlocks, t);
+  // Each block carries a `trackIdx` so we can offset the Y position when
+  // multiple tracks have overlapping blocks — preventing visual overlap.
+  const visibleTrackList = subtitleTracks.filter((tr) => tr.visible);
+  const currentBlocks: Array<SubtitleBlock & { _trackIdx: number; _trackCount: number }> = [];
+  for (let ti = 0; ti < visibleTrackList.length; ti++) {
+    for (const b of visibleTrackList[ti].blocks) {
+      if (t >= b.start && t <= b.end) {
+        currentBlocks.push({ ...b, _trackIdx: ti, _trackCount: visibleTrackList.length });
+      }
+    }
+  }
 
   if (!videoUrl) {
     return (
@@ -735,8 +745,22 @@ export function VideoPreview() {
             effectiveStyle.karaoke && blk.words && blk.words.length > 0;
           const isSelected = selectedBlockId === blk.id;
           const isEditing = editingBlockId === blk.id;
+          // When multiple visible tracks have overlapping blocks, offset
+          // each track's blocks vertically so they don't render on top of
+          // each other. Track 0 stays at the original position; subsequent
+          // tracks shift up progressively.
+          const needsOffset = blk._trackCount > 1 && blk._trackIdx > 0;
+          const offsetStyle: Style = needsOffset
+            ? {
+                ...effectiveStyle,
+                positionY: Math.max(
+                  0.05,
+                  effectiveStyle.positionY - blk._trackIdx * 0.08,
+                ),
+              }
+            : effectiveStyle;
           const baseStyle = subtitleStyle(
-            effectiveStyle,
+            offsetStyle,
             scale,
             subtitleDragging,
           );

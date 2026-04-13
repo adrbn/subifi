@@ -223,13 +223,15 @@ export function Timeline() {
   };
 
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    // Cmd/Ctrl (Win key) + wheel → ignore completely.
-    if (e.ctrlKey || e.metaKey) {
+    // Cmd (Meta) + wheel → ignore completely (browser zoom etc.).
+    if (e.metaKey) {
       e.preventDefault();
       return;
     }
-    // Shift + wheel → horizontal zoom centered on the cursor.
-    if (e.shiftKey) {
+    // Ctrl + wheel → trackpad pinch-to-zoom (macOS sends ctrlKey for
+    // pinch gestures). Shift + wheel → mouse-based zoom. Both trigger
+    // the same horizontal zoom centered on the cursor.
+    if (e.ctrlKey || e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
       const scrollEl = scrollRef.current;
@@ -253,16 +255,20 @@ export function Timeline() {
       });
       return;
     }
-    // Plain wheel → smooth horizontal scroll. Translate deltaY into
-    // horizontal travel so a normal mouse wheel scrolls the timeline.
+    // Plain wheel → horizontal scroll. Trackpads already send deltaX for
+    // horizontal swipes — let those through natively. For a regular mouse
+    // wheel (deltaY only), translate it into horizontal travel.
     if (scrollRef.current) {
-      const dominant =
-        Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      if (dominant !== 0) {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        // Trackpad horizontal swipe — let the browser handle it natively.
+        // No preventDefault so the overflow-x:auto scrolls naturally.
+        return;
+      }
+      // Mouse vertical wheel → translate to horizontal scroll
+      if (e.deltaY !== 0) {
         e.preventDefault();
         e.stopPropagation();
-        // Smaller multiplier for softer scrolling
-        scrollRef.current.scrollLeft += dominant * 0.5;
+        scrollRef.current.scrollLeft += e.deltaY * 0.5;
       }
     }
   };
