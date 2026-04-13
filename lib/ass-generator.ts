@@ -4,16 +4,10 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 // The file is consumed by ffmpeg's `subtitles` filter (libass) during burn-in.
 //
 // Rounded backgrounds: When a style has backgroundRadius > 0 we emit TWO
-// Dialogue lines per subtitle — a background layer with an opaque box clipped
-// to a rounded-rect vector path, and a text layer with outline only. The
+// Dialogue lines per subtitle — a background layer drawn via \p1 drawing
+// mode (rounded rectangle shape), and a text layer with outline only. The
 // text dimensions must be measured by the caller (see burn-in.ts
 // measureBlockText()) and passed via `blockMetrics`.
-//
-// Fonts: We use a belt-and-suspenders approach. The burn pipeline writes TTFs
-// to a `fontsdir/` that ffmpeg's subtitles filter scans, AND we embed the
-// same fonts in the ASS [Fonts] section. The [Fonts] section is the most
-// reliable path in ffmpeg-wasm because libass extracts them to a temp dir it
-// always trusts, whereas fontsdir scanning can silently fail in some builds.
 
 function hexToAssColor(hex: string, alpha = 1): string {
   const h = hex.replace('#', '').padEnd(6, '0');
@@ -120,41 +114,29 @@ export type BlockMetrics = {
   height: number; // text content height (no padding)
 };
 
-// Build a rounded-rectangle vector-clip string for ASS \clip(drawing).
-// Coordinates are in PlayRes units (absolute). The path uses cubic bezier
-// curves at each corner to approximate a CSS border-radius.
-function roundedRectClip(
-  cx: number,  // center X
-  cy: number,  // center Y
-  halfW: number,
-  halfH: number,
-  r: number,
-): string {
-  // Clamp radius so it doesn't exceed the half-dimensions.
-  const rx = Math.min(r, halfW);
-  const ry = Math.min(r, halfH);
-  const x1 = Math.round(cx - halfW);
-  const y1 = Math.round(cy - halfH);
-  const x2 = Math.round(cx + halfW);
-  const y2 = Math.round(cy + halfH);
-  const rrx = Math.round(rx);
-  const rry = Math.round(ry);
-  // Cubic bezier control-point factor for quarter-circle approximation.
-  // κ ≈ 0.5523 for a near-perfect circular arc.
+// Build a rounded-rectangle ASS drawing path (for \p1 mode).
+// Coordinates go from (0,0) to (w,h). With a DrawBG style that has
+// FontSize=64 and Alignment=7, 1 drawing unit = 1 PlayRes pixel, and
+// \pos(x1,y1) places the top-left corner.
+function roundedRectDraw(w: number, h: number, r: number): string {
+  const rx = Math.min(Math.round(r), Math.round(w / 2));
+  const ry = Math.min(Math.round(r), Math.round(h / 2));
+  const W = Math.round(w);
+  const H = Math.round(h);
+  // κ ≈ 0.5523 for a near-perfect circular arc via cubic bezier.
   const kx = Math.round(rx * 0.5523);
   const ky = Math.round(ry * 0.5523);
 
-  // Path: start at top-left + radius, go clockwise.
   return [
-    `m ${x1 + rrx} ${y1}`,                       // move: top edge, right of TL corner
-    `l ${x2 - rrx} ${y1}`,                        // line: top edge → before TR corner
-    `b ${x2 - rrx + kx} ${y1} ${x2} ${y1 + rry - ky} ${x2} ${y1 + rry}`, // curve: TR corner
-    `l ${x2} ${y2 - rry}`,                        // line: right edge → before BR corner
-    `b ${x2} ${y2 - rry + ky} ${x2 - rrx + kx} ${y2} ${x2 - rrx} ${y2}`, // curve: BR corner
-    `l ${x1 + rrx} ${y2}`,                        // line: bottom edge → before BL corner
-    `b ${x1 + rrx - kx} ${y2} ${x1} ${y2 - rry + ky} ${x1} ${y2 - rry}`, // curve: BL corner
-    `l ${x1} ${y1 + rry}`,                        // line: left edge → before TL corner
-    `b ${x1} ${y1 + rry - ky} ${x1 + rrx - kx} ${y1} ${x1 + rrx} ${y1}`, // curve: TL corner
+    `m ${rx} 0`,
+    `l ${W - rx} 0`,
+    `b ${W - rx + kx} 0 ${W} ${ry - ky} ${W} ${ry}`,
+    `l ${W} ${H - ry}`,
+    `b ${W} ${H - ry + ky} ${W - rx + kx} ${H} ${W - rx} ${H}`,
+    `l ${rx} ${H}`,
+    `b ${rx - kx} ${H} 0 ${H - ry + ky} 0 ${H - ry}`,
+    `l 0 ${ry}`,
+    `b 0 ${ry - ky} ${rx - kx} 0 ${rx} 0`,
   ].join(' ');
 }
 
@@ -251,10 +233,10 @@ export function generateAss({
   // built by merging the override over the global style. Blocks without
   // overrides reference "Default".
   //
-  // When dual-layer is active for a block, we also generate a "B{i}_BG"
-  // style (opaque box, no text outline) alongside the "B{i}" text style.
+  // When dual-layer is active for a block, the text layer uses a text-only
+  // style (BorderStyle=1) while the BG is drawn via \p1 with the "DrawBG"
+  // style (a single shared style for all drawing-mode backgrounds).
   const blockStyleLines: string[] = [];
-  const defaultNeedsDual = useDualLayer(style, -1); // not used per-block, but we check global below
 
   blocks.forEach((b, i) => {
     const merged: Style = b.styleOverride
@@ -264,28 +246,34 @@ export function generateAss({
     const dual = useDualLayer(merged, i);
 
     if (dual && hasOverride) {
-      // Dual-layer with override: per-block BG + text styles.
-      blockStyleLines.push(buildStyleLine(`B${i}_BG`, merged, 'bg-only'));
+      // Dual-layer with override: per-block text-only style (BG drawn via \p1).
       blockStyleLines.push(buildStyleLine(`B${i}`, merged, 'text-only'));
+    } else if (dual) {
+      // Dual-layer without override: will use Default_TXT for text.
     } else if (hasOverride) {
       blockStyleLines.push(buildStyleLine(`B${i}`, merged, 'auto'));
     }
-    // Blocks without overrides use Default_BG/Default_TXT (dual) or Default (single).
   });
 
-  // Also generate dual-layer variants of the Default style if the global
-  // style itself has a background radius and we have metrics for blocks that
-  // use Default.
+  // Default_TXT: text-only variant of the Default style for dual-layer blocks
+  // without per-block overrides.
   const globalHasRadius = (style.backgroundRadius ?? 0) > 0 && style.backgroundOpacity > 0;
-  const needsDefaultDual = globalHasRadius && blockMetrics != null &&
+  const needsDefaultTxt = globalHasRadius && blockMetrics != null &&
     blocks.some((b, i) =>
       (!b.styleOverride || Object.keys(b.styleOverride).length === 0) &&
       blockMetrics.has(i));
-  const defaultBgLine = needsDefaultDual
-    ? buildStyleLine('Default_BG', style, 'bg-only')
-    : null;
-  const defaultTxtLine = needsDefaultDual
+  const defaultTxtLine = needsDefaultTxt
     ? buildStyleLine('Default_TXT', style, 'text-only')
+    : null;
+
+  // DrawBG: shared style for all \p1 drawn backgrounds. FontSize=64 makes
+  // 1 drawing unit = 1 PlayRes pixel. Alignment=7 (top-left) so \pos()
+  // places the top-left corner of the drawn shape. MUST use the same font
+  // as the main style — libass silently drops Dialogue lines whose style
+  // references a font not found in fontsdir.
+  const needsDrawBG = blockMetrics != null && blockMetrics.size > 0;
+  const drawBgLine = needsDrawBG
+    ? `Style: DrawBG,${style.fontFamily},64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1`
     : null;
 
   // Each text overlay also gets its own style. We treat TextOverlay as a
@@ -318,8 +306,8 @@ export function generateAss({
   });
 
   const extraStyleLines: string[] = [];
-  if (defaultBgLine) extraStyleLines.push(defaultBgLine);
   if (defaultTxtLine) extraStyleLines.push(defaultTxtLine);
+  if (drawBgLine) extraStyleLines.push(drawBgLine);
 
   // Build [Fonts] section — embeds font binaries directly in the ASS file
   // using the SSA UU-like encoding (3 bytes → 4 chars, +33 offset). libass
@@ -383,26 +371,35 @@ export function generateAss({
     }
 
     if (dual) {
-      // --- Dual-layer: rounded background ---
+      // --- Dual-layer: \p1 drawn rounded background + text overlay ---
       const metrics = blockMetrics!.get(i)!;
       const padX = merged.backgroundPaddingX;
       const padY = merged.backgroundPaddingY;
       const radius = merged.backgroundRadius ?? 0;
-      const halfW = metrics.width / 2 + padX;
-      const halfH = metrics.height / 2 + padY;
-      const clip = roundedRectClip(posX, posY, halfW, halfH, radius);
+      const boxW = metrics.width + padX * 2;
+      const boxH = metrics.height + padY * 2;
+      const boxX = Math.round(posX - boxW / 2);
+      const boxY = Math.round(posY - boxH / 2);
+      const drawPath = roundedRectDraw(boxW, boxH, radius);
 
-      // BG style name: either B{i}_BG or Default_BG depending on override
-      const bgStyleName = hasOverride ? `B${i}_BG` : 'Default_BG';
+      // Background color in ASS BGR format.
+      const bgHex = merged.backgroundColor.replace('#', '').padEnd(6, '0');
+      const bgB = bgHex.slice(4, 6).toUpperCase();
+      const bgG = bgHex.slice(2, 4).toUpperCase();
+      const bgR = bgHex.slice(0, 2).toUpperCase();
+      const bgAlpha = Math.round((1 - merged.backgroundOpacity) * 255)
+        .toString(16).padStart(2, '0').toUpperCase();
+
       const txtStyleName = hasOverride ? `B${i}` : 'Default_TXT';
 
-      // Layer 0: background box (text invisible, clipped to rounded rect).
+      // Layer 0: drawn rounded-rect background via \p1.
+      // DrawBG style has FontSize=64 so 1 drawing unit = 1 PlayRes pixel.
       const bgInline =
-        `{\\pos(${posX},${posY})` +
-        `\\xbord${padX}\\ybord${padY}` +
-        `\\1a&HFF&\\2a&HFF&` +        // hide text, keep box
-        `\\clip(1,${clip})}`;
-      events.push(`Dialogue: 0,${start},${end},${bgStyleName},,0,0,0,,${bgInline}${text}`);
+        `{\\pos(${boxX},${boxY})` +
+        `\\1c&H${bgB}${bgG}${bgR}&` +
+        `\\1a&H${bgAlpha}&` +
+        `\\bord0\\shad0\\p1}`;
+      events.push(`Dialogue: 0,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
 
       // Layer 1: text with outline only (no background box).
       const txtInline = `{\\pos(${posX},${posY})}`;
