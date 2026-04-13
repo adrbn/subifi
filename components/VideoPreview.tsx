@@ -130,6 +130,10 @@ function subtitleStyle(
     left: `${style.positionX * 100}%`,
     top: `${style.positionY * 100}%`,
     transform: 'translate(-50%, -50%)',
+    // content-box so maxWidth constrains the TEXT width only — padding
+    // extends outside, giving subtitles the full requested width for text
+    // without the background padding eating into it.
+    boxSizing: 'content-box' as const,
     maxWidth: `${style.maxWidth * 100}%`,
     padding: `${padY}px ${padX}px`,
     borderRadius: `${radius}px`,
@@ -186,6 +190,7 @@ function textOverlayStyle(
     left: `${ov.positionX * 100}%`,
     top: `${ov.positionY * 100}%`,
     transform: 'translate(-50%, -50%)',
+    boxSizing: 'content-box' as const,
     maxWidth: `${ov.maxWidth * 100}%`,
     padding: `${padY}px ${padX}px`,
     borderRadius: `${radius}px`,
