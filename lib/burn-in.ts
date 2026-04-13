@@ -6,7 +6,7 @@ import {
   forceSingleThread,
   isMultiThreaded,
 } from './ffmpeg-client';
-import { generateAss } from './ass-generator';
+import { generateAss, type BlockMetrics, type EmbeddedFont } from './ass-generator';
 import {
   getKeepRanges,
   remapImageOverlays,
@@ -414,6 +414,63 @@ function buildCutPrefix(
   return { filter: parts.join(';'), vLabel: '[vcut]', aLabel: '[acut]' };
 }
 
+// Measure the rendered text dimensions for each subtitle block using Canvas
+// 2D. Returns a Map<blockIndex, BlockMetrics> that the ASS generator uses to
+// emit \clip(rounded-rect) paths for blocks with backgroundRadius > 0.
+//
+// The measurement runs in the browser's main thread (Canvas is available) and
+// uses the same Google Font that's already loaded for the preview. Metrics
+// are in PlayRes script units (= native video pixels).
+function measureBlockText(
+  blocks: SubtitleBlock[],
+  globalStyle: Style,
+): Map<number, BlockMetrics> {
+  const results = new Map<number, BlockMetrics>();
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return results;
+
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    const merged: Style = b.styleOverride
+      ? { ...globalStyle, ...b.styleOverride }
+      : globalStyle;
+
+    // Skip blocks that won't need metrics (no bg radius).
+    if (merged.backgroundOpacity <= 0 || (merged.backgroundRadius ?? 0) <= 0) {
+      continue;
+    }
+
+    const weight = merged.fontWeight;
+    const size = merged.fontSize;
+    const family = merged.fontFamily;
+    const italic = merged.italic ? 'italic ' : '';
+    ctx.font = `${italic}${weight} ${size}px "${family}", system-ui, sans-serif`;
+
+    // Handle multi-line text: measure each line, take max width and sum heights.
+    const lines = b.text.split('\n');
+    let maxWidth = 0;
+    const lineHeight = (merged.lineHeight ?? 1.2) * size;
+    for (const line of lines) {
+      const m = ctx.measureText(line);
+      maxWidth = Math.max(maxWidth, m.width);
+    }
+    // Add letter-spacing contribution: Canvas measureText doesn't include
+    // the extra spacing added by CSS letter-spacing. Approximate it.
+    const ls = merged.letterSpacing ?? 0;
+    if (ls !== 0) {
+      for (const line of lines) {
+        maxWidth = Math.max(maxWidth, ctx.measureText(line).width + ls * (line.length - 1));
+      }
+    }
+
+    const totalHeight = lines.length * lineHeight;
+    results.set(i, { width: maxWidth, height: totalHeight });
+  }
+
+  return results;
+}
+
 export async function burnSubtitles(
   input: BurnInput,
   onProgress?: BurnProgress,
@@ -591,6 +648,11 @@ async function burnSubtitlesCore(
 
     const fontNameMap = new Map<string, string>();
     let fontsWritten = 0;
+    // Collect font binaries for ASS [Fonts] section embedding. This is the
+    // most reliable way to provide fonts to libass in ffmpeg-wasm — it
+    // bypasses fontsdir scanning entirely. We still ALSO write to fontsdir
+    // as a fallback (belt and suspenders).
+    const embeddedFonts: EmbeddedFont[] = [];
 
     // Custom user-uploaded fonts.
     for (const f of customFonts) {
@@ -602,8 +664,10 @@ async function burnSubtitlesCore(
       }
       const internal = readFontFamilyName(f.buffer);
       if (internal) fontNameMap.set(f.name, internal);
+      const filename = `${f.name}.${f.format}`;
+      embeddedFonts.push({ filename, data: new Uint8Array(f.buffer.slice(0)) });
       await ff.writeFile(
-        `${fontsDir}/${f.name}.${f.format}`,
+        `${fontsDir}/${filename}`,
         cloneBytesForFFmpeg(f.buffer),
       );
       fontsWritten++;
@@ -625,6 +689,7 @@ async function burnSubtitlesCore(
             `libass will try to match by the display name, which may fail`,
         );
       }
+      embeddedFonts.push({ filename: mainFont.name, data: new Uint8Array(mainFont.buffer.slice(0)) });
       await ff.writeFile(
         `${fontsDir}/${mainFont.name}`,
         cloneBytesForFFmpeg(mainFont.buffer),
@@ -647,6 +712,30 @@ async function burnSubtitlesCore(
       if (f) {
         const internal = readFontFamilyName(f.buffer);
         if (internal) fontNameMap.set(t.fontFamily, internal);
+        embeddedFonts.push({ filename: f.name, data: new Uint8Array(f.buffer.slice(0)) });
+        await ff.writeFile(
+          `${fontsDir}/${f.name}`,
+          cloneBytesForFFmpeg(f.buffer),
+        );
+        fontsWritten++;
+      }
+    }
+    // Per-block style override fonts. Blocks can override fontFamily and
+    // fontWeight independently — each unique combination needs its own
+    // TTF in fontsdir and a fontNameMap entry so the ASS Style line
+    // references the correct internal name.
+    for (const b of effectiveBlocks) {
+      if (!b.styleOverride) continue;
+      const family = b.styleOverride.fontFamily ?? style.fontFamily;
+      const weight = b.styleOverride.fontWeight ?? style.fontWeight;
+      const key = `${family}@${weight}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const f = await fetchGoogleFontFile(family, weight);
+      if (f) {
+        const internal = readFontFamilyName(f.buffer);
+        if (internal) fontNameMap.set(family, internal);
+        embeddedFonts.push({ filename: f.name, data: new Uint8Array(f.buffer.slice(0)) });
         await ff.writeFile(
           `${fontsDir}/${f.name}`,
           cloneBytesForFFmpeg(f.buffer),
@@ -674,6 +763,7 @@ async function burnSubtitlesCore(
         const internal = readFontFamilyName(f.buffer);
         const resolvedName = internal ?? spec.family;
         if (internal) fontNameMap.set(spec.family, internal);
+        embeddedFonts.push({ filename: f.name, data: new Uint8Array(f.buffer.slice(0)) });
         await ff.writeFile(
           `${fontsDir}/${f.name}`,
           cloneBytesForFFmpeg(f.buffer),
@@ -701,10 +791,34 @@ async function burnSubtitlesCore(
       );
     }
 
+    // --- Measure text for rounded-rect clip paths ---
+    // Canvas measurement uses the browser-loaded fonts (same as preview).
+    // The metrics are in native video pixels (= PlayRes units).
+    const blockMetrics = measureBlockText(effectiveBlocks, style);
+    console.debug('[burn] measured block metrics for rounded clips', {
+      total: effectiveBlocks.length,
+      measured: blockMetrics.size,
+    });
+
     // --- Generate the ASS file with remapped font names ---
     const remap = (name: string) => fontNameMap.get(name) ?? name;
+    const remappedBlocks = effectiveBlocks.map((b) => {
+      if (!b.styleOverride?.fontFamily) return b;
+      return {
+        ...b,
+        styleOverride: {
+          ...b.styleOverride,
+          fontFamily: remap(b.styleOverride.fontFamily),
+        },
+      };
+    });
+    console.debug('[burn] embedding fonts in ASS [Fonts] section', {
+      count: embeddedFonts.length,
+      totalBytes: embeddedFonts.reduce((s, f) => s + f.data.byteLength, 0),
+      names: embeddedFonts.map((f) => f.filename),
+    });
     const assContent = generateAss({
-      blocks: effectiveBlocks,
+      blocks: remappedBlocks,
       style: { ...style, fontFamily: remap(style.fontFamily) },
       videoWidth,
       videoHeight,
@@ -713,6 +827,8 @@ async function burnSubtitlesCore(
         fontFamily: remap(t.fontFamily),
       })),
       fallbackFonts: Object.fromEntries(fallbackFonts),
+      blockMetrics,
+      embeddedFonts,
     });
     const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
     console.debug('[burn] ass file generated', {

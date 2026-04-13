@@ -269,7 +269,7 @@ export function StylePanel() {
       <Slider
         label="Font size"
         min={isTextMode ? 12 : 16}
-        max={isTextMode ? 200 : isBlockMode ? 300 : 120}
+        max={300}
         value={val.fontSize}
         unit="px"
         onChange={(v) => set({ fontSize: v })}
@@ -440,14 +440,9 @@ export function StylePanel() {
         unit="%"
         onChange={(v) => set({ positionY: v / 100 })}
       />
-      <Slider
-        label="Max width"
-        min={10}
-        max={100}
-        value={Math.round(val.maxWidth * 100)}
-        unit="%"
-        onChange={(v) => set({ maxWidth: v / 100 })}
-      />
+      {/* Max width slider removed — subtitles no longer auto-wrap.
+          The segmenter inserts \n for line breaks; font size + position
+          are the controls for on-screen sizing. */}
 
       <hr className="border-border" />
 

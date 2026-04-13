@@ -130,11 +130,10 @@ function subtitleStyle(
     left: `${style.positionX * 100}%`,
     top: `${style.positionY * 100}%`,
     transform: 'translate(-50%, -50%)',
-    // content-box so maxWidth constrains the TEXT width only — padding
-    // extends outside, giving subtitles the full requested width for text
-    // without the background padding eating into it.
     boxSizing: 'content-box' as const,
-    maxWidth: `${style.maxWidth * 100}%`,
+    // NO maxWidth — subtitles never auto-wrap. The segmenter already
+    // inserts \n for multi-line blocks; CSS white-space: pre preserves
+    // those line breaks without adding any automatic word-wrap.
     padding: `${padY}px ${padX}px`,
     borderRadius: `${radius}px`,
     background: bg,
@@ -148,8 +147,7 @@ function subtitleStyle(
     lineHeight: style.lineHeight ?? 1.2,
     letterSpacing: `${(style.letterSpacing ?? 0) * scale}px`,
     wordSpacing: `${(style.wordSpacing ?? 0) * scale}px`,
-    whiteSpace: 'pre-wrap',
-    textWrap: 'balance' as unknown as string,
+    whiteSpace: 'pre',
     pointerEvents: 'auto',
     userSelect: 'none',
     cursor: dragging ? 'grabbing' : 'grab',
@@ -191,7 +189,6 @@ function textOverlayStyle(
     top: `${ov.positionY * 100}%`,
     transform: 'translate(-50%, -50%)',
     boxSizing: 'content-box' as const,
-    maxWidth: `${ov.maxWidth * 100}%`,
     padding: `${padY}px ${padX}px`,
     borderRadius: `${radius}px`,
     background: bg,
@@ -203,7 +200,7 @@ function textOverlayStyle(
     textAlign: ov.textAlign,
     textShadow,
     lineHeight: 1.2,
-    whiteSpace: 'pre-wrap',
+    whiteSpace: 'pre',
     pointerEvents: 'auto',
     userSelect: 'none',
     cursor: dragging ? 'grabbing' : 'grab',

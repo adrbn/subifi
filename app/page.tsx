@@ -383,12 +383,22 @@ export default function Page() {
           <div className="min-w-0 truncate">
             <span className="font-semibold">Error:</span> {error}
           </div>
-          <button
-            className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
-            onClick={() => setStatus('idle', null)}
-          >
-            dismiss
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
+              onClick={() => {
+                navigator.clipboard.writeText(error);
+              }}
+            >
+              copy
+            </button>
+            <button
+              className="shrink-0 text-xs text-red-200 underline hover:text-red-100"
+              onClick={() => setStatus('idle', null)}
+            >
+              dismiss
+            </button>
+          </div>
         </div>
       )}
 
