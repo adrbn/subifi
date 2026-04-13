@@ -154,6 +154,33 @@ function syncBlocksToTrack(
   );
 }
 
+// Clamp a block's start/end so it doesn't overlap its neighbors in the
+// sorted block array. A 10ms minimum gap prevents visually "touching"
+// blocks from sharing a boundary and rendering simultaneously.
+const MIN_GAP = 0.01;
+
+function clampToNeighbors(
+  blocks: SubtitleBlock[],
+  id: string,
+  start: number,
+  end: number,
+): { start: number; end: number } {
+  const idx = blocks.findIndex((b) => b.id === id);
+  if (idx < 0) return { start, end };
+  const prev = idx > 0 ? blocks[idx - 1] : null;
+  const next = idx < blocks.length - 1 ? blocks[idx + 1] : null;
+  let s = start;
+  let e = end;
+  if (prev && s < prev.end + MIN_GAP) s = prev.end + MIN_GAP;
+  if (next && e > next.start - MIN_GAP) e = next.start - MIN_GAP;
+  // Ensure the block still has positive duration after clamping
+  if (e - s < 0.05 && prev && next) {
+    s = prev.end + MIN_GAP;
+    e = next.start - MIN_GAP;
+  }
+  return { start: s, end: e };
+}
+
 // Returns the patch to merge into a `set()` so that this mutation becomes
 // undoable. Coalesces with the previous push if it happened very recently.
 const pushHistory = (
@@ -389,7 +416,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   updateBlock: (id, patch) =>
     set((s) => {
-      const newBlocks = s.blocks.map((b) => {
+      let newBlocks = s.blocks.map((b) => {
         if (b.id !== id) return b;
         const updated = { ...b, ...patch };
         // When the text is manually edited, the word-level timing data no
@@ -400,6 +427,19 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         }
         return updated;
       });
+      // Prevent overlap when start/end changed
+      if ('start' in patch || 'end' in patch) {
+        const idx = newBlocks.findIndex((b) => b.id === id);
+        if (idx >= 0) {
+          const b = newBlocks[idx];
+          const clamped = clampToNeighbors(newBlocks, id, b.start, b.end);
+          if (clamped.start !== b.start || clamped.end !== b.end) {
+            newBlocks = newBlocks.map((blk) =>
+              blk.id === id ? { ...blk, start: clamped.start, end: clamped.end } : blk,
+            );
+          }
+        }
+      }
       return {
         ...pushHistory(s),
         blocks: newBlocks,
