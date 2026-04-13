@@ -6,7 +6,7 @@ import {
   forceSingleThread,
   isMultiThreaded,
 } from './ffmpeg-client';
-import { generateAss, type BlockMetrics, type EmbeddedFont } from './ass-generator';
+import { generateAss, type BlockMetrics } from './ass-generator';
 import {
   getKeepRanges,
   remapImageOverlays,
@@ -648,11 +648,6 @@ async function burnSubtitlesCore(
 
     const fontNameMap = new Map<string, string>();
     let fontsWritten = 0;
-    // Collect font binaries for ASS [Fonts] section embedding. This is the
-    // most reliable way to provide fonts to libass in ffmpeg-wasm — it
-    // bypasses fontsdir scanning entirely. We still ALSO write to fontsdir
-    // as a fallback (belt and suspenders).
-    const embeddedFonts: EmbeddedFont[] = [];
 
     // Custom user-uploaded fonts.
     for (const f of customFonts) {
@@ -665,7 +660,6 @@ async function burnSubtitlesCore(
       const internal = readFontFamilyName(f.buffer);
       if (internal) fontNameMap.set(f.name, internal);
       const filename = `${f.name}.${f.format}`;
-      embeddedFonts.push({ filename, data: new Uint8Array(f.buffer.slice(0)) });
       await ff.writeFile(
         `${fontsDir}/${filename}`,
         cloneBytesForFFmpeg(f.buffer),
@@ -689,7 +683,6 @@ async function burnSubtitlesCore(
             `libass will try to match by the display name, which may fail`,
         );
       }
-      embeddedFonts.push({ filename: mainFont.name, data: new Uint8Array(mainFont.buffer.slice(0)) });
       await ff.writeFile(
         `${fontsDir}/${mainFont.name}`,
         cloneBytesForFFmpeg(mainFont.buffer),
@@ -712,7 +705,6 @@ async function burnSubtitlesCore(
       if (f) {
         const internal = readFontFamilyName(f.buffer);
         if (internal) fontNameMap.set(t.fontFamily, internal);
-        embeddedFonts.push({ filename: f.name, data: new Uint8Array(f.buffer.slice(0)) });
         await ff.writeFile(
           `${fontsDir}/${f.name}`,
           cloneBytesForFFmpeg(f.buffer),
@@ -735,7 +727,6 @@ async function burnSubtitlesCore(
       if (f) {
         const internal = readFontFamilyName(f.buffer);
         if (internal) fontNameMap.set(family, internal);
-        embeddedFonts.push({ filename: f.name, data: new Uint8Array(f.buffer.slice(0)) });
         await ff.writeFile(
           `${fontsDir}/${f.name}`,
           cloneBytesForFFmpeg(f.buffer),
@@ -763,7 +754,6 @@ async function burnSubtitlesCore(
         const internal = readFontFamilyName(f.buffer);
         const resolvedName = internal ?? spec.family;
         if (internal) fontNameMap.set(spec.family, internal);
-        embeddedFonts.push({ filename: f.name, data: new Uint8Array(f.buffer.slice(0)) });
         await ff.writeFile(
           `${fontsDir}/${f.name}`,
           cloneBytesForFFmpeg(f.buffer),
@@ -812,11 +802,6 @@ async function burnSubtitlesCore(
         },
       };
     });
-    console.debug('[burn] embedding fonts in ASS [Fonts] section', {
-      count: embeddedFonts.length,
-      totalBytes: embeddedFonts.reduce((s, f) => s + f.data.byteLength, 0),
-      names: embeddedFonts.map((f) => f.filename),
-    });
     const assContent = generateAss({
       blocks: remappedBlocks,
       style: { ...style, fontFamily: remap(style.fontFamily) },
@@ -828,7 +813,9 @@ async function burnSubtitlesCore(
       })),
       fallbackFonts: Object.fromEntries(fallbackFonts),
       blockMetrics,
-      embeddedFonts,
+      // Note: embeddedFonts intentionally omitted — the [Fonts] section
+      // triggers an assertion crash in ffmpeg-wasm's libass build. fontsdir
+      // alone works (confirmed by "Loading font file" in libass stderr).
     });
     const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
     console.debug('[burn] ass file generated', {
