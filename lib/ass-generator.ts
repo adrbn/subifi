@@ -187,8 +187,10 @@ export type AssGenInput = {
   fallbackFonts?: Record<string, string>;
   // Canvas-measured text dimensions per block index. When present AND the
   // block has backgroundRadius > 0, the generator emits a dual-layer
-  // rendering (bg + text) with a rounded-rect \clip on the background.
+  // rendering (bg + text) with a \p1 drawn rounded-rect background.
   blockMetrics?: Map<number, BlockMetrics>;
+  // Same as blockMetrics but for text overlays (keyed by overlay index).
+  textOverlayMetrics?: Map<number, BlockMetrics>;
   // Fonts to embed directly in the ASS [Fonts] section. This is the most
   // reliable way to provide fonts to libass in ffmpeg-wasm — it bypasses
   // fontsdir scanning entirely.
@@ -221,6 +223,7 @@ export function generateAss({
   textOverlays = [],
   fallbackFonts = {},
   blockMetrics,
+  textOverlayMetrics,
   embeddedFonts = [],
 }: AssGenInput): string {
   // Decide per-block whether to use dual-layer (rounded bg) or single-layer.
@@ -271,7 +274,8 @@ export function generateAss({
   // places the top-left corner of the drawn shape. MUST use the same font
   // as the main style — libass silently drops Dialogue lines whose style
   // references a font not found in fontsdir.
-  const needsDrawBG = blockMetrics != null && blockMetrics.size > 0;
+  const needsDrawBG = (blockMetrics != null && blockMetrics.size > 0) ||
+    (textOverlayMetrics != null && textOverlayMetrics.size > 0);
   const drawBgLine = needsDrawBG
     ? `Style: DrawBG,${style.fontFamily},64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1`
     : null;
@@ -302,7 +306,10 @@ export function generateAss({
       karaoke: false,
       karaokeBaseColor: '#94a3b8',
     };
-    return buildStyleLine(`TO${i}`, asStyle);
+    const needsDual = t.backgroundOpacity > 0 &&
+      (t.backgroundRadius ?? 0) > 0 &&
+      !!textOverlayMetrics?.has(i);
+    return buildStyleLine(`TO${i}`, asStyle, needsDual ? 'text-only' : 'auto');
   });
 
   const extraStyleLines: string[] = [];
@@ -417,7 +424,8 @@ export function generateAss({
   });
 
   // Text overlays are layer 2 so they sit on top of the subtitle layers.
-  const overlayEvents = textOverlays.map((t, i) => {
+  const overlayEvents: string[] = [];
+  textOverlays.forEach((t, i) => {
     const start = formatAssTimestamp(t.start);
     const end = formatAssTimestamp(t.end);
     let text = escapeAssText(t.text);
@@ -426,12 +434,43 @@ export function generateAss({
     }
     const tx = Math.round(t.positionX * videoWidth);
     const ty = Math.round(t.positionY * videoHeight);
-    const hasBg = t.backgroundOpacity > 0;
-    const bordOverrides = hasBg
-      ? `\\xbord${t.backgroundPaddingX}\\ybord${t.backgroundPaddingY}`
-      : '';
-    const inline = `{\\pos(${tx},${ty})${bordOverrides}}`;
-    return `Dialogue: 2,${start},${end},TO${i},,0,0,0,,${inline}${text}`;
+
+    const needsDual = t.backgroundOpacity > 0 &&
+      (t.backgroundRadius ?? 0) > 0 &&
+      !!textOverlayMetrics?.has(i);
+
+    if (needsDual) {
+      const metrics = textOverlayMetrics!.get(i)!;
+      const padX = t.backgroundPaddingX;
+      const padY = t.backgroundPaddingY;
+      const boxW = metrics.width + padX * 2;
+      const boxH = metrics.height + padY * 2;
+      const boxX = Math.round(tx - boxW / 2);
+      const boxY = Math.round(ty - boxH / 2);
+      const drawPath = roundedRectDraw(boxW, boxH, t.backgroundRadius);
+
+      const bgHex = t.backgroundColor.replace('#', '').padEnd(6, '0');
+      const bgB = bgHex.slice(4, 6).toUpperCase();
+      const bgG = bgHex.slice(2, 4).toUpperCase();
+      const bgR = bgHex.slice(0, 2).toUpperCase();
+      const bgAlpha = Math.round((1 - t.backgroundOpacity) * 255)
+        .toString(16).padStart(2, '0').toUpperCase();
+
+      const bgInline =
+        `{\\pos(${boxX},${boxY})` +
+        `\\1c&H${bgB}${bgG}${bgR}&` +
+        `\\1a&H${bgAlpha}&` +
+        `\\bord0\\shad0\\p1}`;
+      overlayEvents.push(`Dialogue: 2,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
+      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${tx},${ty})}${text}`);
+    } else {
+      const hasBg = t.backgroundOpacity > 0;
+      const bordOverrides = hasBg
+        ? `\\xbord${t.backgroundPaddingX}\\ybord${t.backgroundPaddingY}`
+        : '';
+      const inline = `{\\pos(${tx},${ty})${bordOverrides}}`;
+      overlayEvents.push(`Dialogue: 2,${start},${end},TO${i},,0,0,0,,${inline}${text}`);
+    }
   });
 
   return [...header, ...events, ...overlayEvents, ''].join('\n');

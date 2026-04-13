@@ -471,6 +471,36 @@ function measureBlockText(
   return results;
 }
 
+// Measure text overlay dimensions for rounded-rect backgrounds (same as
+// measureBlockText but for TextOverlay items).
+function measureTextOverlays(
+  overlays: TextOverlay[],
+): Map<number, BlockMetrics> {
+  const results = new Map<number, BlockMetrics>();
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return results;
+
+  for (let i = 0; i < overlays.length; i++) {
+    const t = overlays[i];
+    if (t.backgroundOpacity <= 0 || (t.backgroundRadius ?? 0) <= 0) continue;
+
+    const italic = t.italic ? 'italic ' : '';
+    ctx.font = `${italic}${t.fontWeight} ${t.fontSize}px "${t.fontFamily}", system-ui, sans-serif`;
+
+    const lines = t.text.split('\n');
+    let maxWidth = 0;
+    const lineHeight = 1.2 * t.fontSize;
+    for (const line of lines) {
+      maxWidth = Math.max(maxWidth, ctx.measureText(line).width);
+    }
+
+    results.set(i, { width: maxWidth, height: lines.length * lineHeight });
+  }
+
+  return results;
+}
+
 export async function burnSubtitles(
   input: BurnInput,
   onProgress?: BurnProgress,
@@ -785,9 +815,10 @@ async function burnSubtitlesCore(
     // Canvas measurement uses the browser-loaded fonts (same as preview).
     // The metrics are in native video pixels (= PlayRes units).
     const blockMetrics = measureBlockText(effectiveBlocks, style);
-    console.debug('[burn] measured block metrics for rounded clips', {
-      total: effectiveBlocks.length,
-      measured: blockMetrics.size,
+    const textOverlayMetrics = measureTextOverlays(effectiveTextOverlays);
+    console.debug('[burn] measured metrics for rounded backgrounds', {
+      blocks: blockMetrics.size,
+      textOverlays: textOverlayMetrics.size,
     });
 
     // --- Generate the ASS file with remapped font names ---
@@ -813,6 +844,7 @@ async function burnSubtitlesCore(
       })),
       fallbackFonts: Object.fromEntries(fallbackFonts),
       blockMetrics,
+      textOverlayMetrics,
       // Note: embeddedFonts intentionally omitted — the [Fonts] section
       // triggers an assertion crash in ffmpeg-wasm's libass build. fontsdir
       // alone works (confirmed by "Loading font file" in libass stderr).
