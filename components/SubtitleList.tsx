@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { Button } from './ui/button';
 import { TranscribeInlineButton } from './TranscribeButton';
+import { GOOGLE_FONTS, loadGoogleFont } from '@/lib/google-fonts';
 import clsx from 'clsx';
 
 function fmt(seconds: number): string {
@@ -225,26 +226,36 @@ export function SubtitleList() {
                 {openOverrides[b.id] && (
                   <div className="mt-1 flex flex-wrap items-center gap-3 rounded border border-border bg-bg-hi/40 px-2 py-1.5 text-xs text-text-muted">
                     <label className="flex items-center gap-1">
+                      <span>font</span>
+                      <select
+                        value={b.styleOverride?.fontFamily ?? globalStyle.fontFamily}
+                        onChange={(e) => {
+                          const family = e.target.value;
+                          if (GOOGLE_FONTS.includes(family)) loadGoogleFont(family, b.styleOverride?.fontWeight ?? globalStyle.fontWeight);
+                          updateBlock(b.id, { styleOverride: { ...b.styleOverride, fontFamily: family } });
+                        }}
+                        className="max-w-[120px] rounded bg-bg-hi px-1 py-0.5 text-text"
+                      >
+                        {GOOGLE_FONTS.map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1">
                       <span>size</span>
                       <input
-                        type="number"
-                        step={1}
-                        min={8}
-                        max={300}
-                        // Display the override if set, otherwise show the
-                        // global value as a placeholder so the field isn't
-                        // empty/confusing.
-                        value={
-                          b.styleOverride?.fontSize ?? globalStyle.fontSize
-                        }
-                        onChange={(e) =>
-                          updateBlock(b.id, {
-                            styleOverride: {
-                              ...b.styleOverride,
-                              fontSize: Number(e.target.value),
-                            },
-                          })
-                        }
+                        type="number" step={1} min={8} max={300}
+                        value={b.styleOverride?.fontSize ?? globalStyle.fontSize}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, fontSize: Number(e.target.value) } })}
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>weight</span>
+                      <input
+                        type="number" step={100} min={100} max={900}
+                        value={b.styleOverride?.fontWeight ?? globalStyle.fontWeight}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, fontWeight: Number(e.target.value) } })}
                         className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
                       />
                     </label>
@@ -252,59 +263,68 @@ export function SubtitleList() {
                       <span>color</span>
                       <input
                         type="color"
-                        value={
-                          b.styleOverride?.textColor ?? globalStyle.textColor
-                        }
-                        onChange={(e) =>
-                          updateBlock(b.id, {
-                            styleOverride: {
-                              ...b.styleOverride,
-                              textColor: e.target.value,
-                            },
-                          })
-                        }
+                        value={b.styleOverride?.textColor ?? globalStyle.textColor}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, textColor: e.target.value } })}
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>outline</span>
+                      <input
+                        type="color"
+                        value={b.styleOverride?.textOutlineColor ?? globalStyle.textOutlineColor}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, textOutlineColor: e.target.value } })}
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>outline W</span>
+                      <input
+                        type="number" step={0.5} min={0} max={20}
+                        value={b.styleOverride?.textOutlineWidth ?? globalStyle.textOutlineWidth}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, textOutlineWidth: Number(e.target.value) } })}
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>bg</span>
+                      <input
+                        type="color"
+                        value={b.styleOverride?.backgroundColor ?? globalStyle.backgroundColor}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, backgroundColor: e.target.value } })}
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>bg %</span>
+                      <input
+                        type="number" step={5} min={0} max={100}
+                        value={Math.round((b.styleOverride?.backgroundOpacity ?? globalStyle.backgroundOpacity) * 100)}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, backgroundOpacity: Number(e.target.value) / 100 } })}
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
                       />
                     </label>
                     <label className="flex items-center gap-1">
                       <span>Y%</span>
                       <input
-                        type="number"
-                        step={1}
-                        min={0}
-                        max={100}
-                        value={Math.round(
-                          (b.styleOverride?.positionY ??
-                            globalStyle.positionY) * 100,
-                        )}
-                        onChange={(e) =>
-                          updateBlock(b.id, {
-                            styleOverride: {
-                              ...b.styleOverride,
-                              positionY: Number(e.target.value) / 100,
-                            },
-                          })
-                        }
+                        type="number" step={1} min={0} max={100}
+                        value={Math.round((b.styleOverride?.positionY ?? globalStyle.positionY) * 100)}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, positionY: Number(e.target.value) / 100 } })}
                         className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
                       />
                     </label>
                     <label className="flex items-center gap-1">
-                      <span>weight</span>
+                      <span>width%</span>
                       <input
-                        type="number"
-                        step={100}
-                        min={100}
-                        max={900}
-                        value={
-                          b.styleOverride?.fontWeight ?? globalStyle.fontWeight
-                        }
-                        onChange={(e) =>
-                          updateBlock(b.id, {
-                            styleOverride: {
-                              ...b.styleOverride,
-                              fontWeight: Number(e.target.value),
-                            },
-                          })
-                        }
+                        type="number" step={5} min={10} max={100}
+                        value={Math.round((b.styleOverride?.maxWidth ?? globalStyle.maxWidth) * 100)}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, maxWidth: Number(e.target.value) / 100 } })}
+                        className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <span>spacing</span>
+                      <input
+                        type="number" step={0.5} min={-10} max={30}
+                        value={b.styleOverride?.letterSpacing ?? globalStyle.letterSpacing}
+                        onChange={(e) => updateBlock(b.id, { styleOverride: { ...b.styleOverride, letterSpacing: Number(e.target.value) } })}
                         className="w-14 rounded bg-bg-hi px-1 py-0.5 font-mono text-text"
                       />
                     </label>
