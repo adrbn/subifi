@@ -1,15 +1,42 @@
 'use client';
 
+import { useRef } from 'react';
 import { useEditor } from '@/lib/store';
 import { Button } from './ui/button';
 import { toJson, toSrt, toTxt, toVtt } from '@/lib/subtitle-formats';
 import { downloadBlob } from '@/lib/download';
+import { exportProject, parseProjectFile } from '@/lib/project-file';
 
 export function ExportBar() {
-  const { blocks, videoFile } = useEditor();
+  const {
+    blocks,
+    videoFile,
+    style,
+    segmentation,
+    subtitleTracks,
+    activeTrackId,
+    words,
+    textOverlays,
+    overlays,
+    cuts,
+    safeZone,
+    customFonts,
+    importProject,
+  } = useEditor();
 
   const baseName = videoFile?.name.replace(/\.[^.]+$/, '') ?? 'subtitles';
   const disabled = blocks.length === 0;
+  const projectInputRef = useRef<HTMLInputElement>(null);
+
+  const onImportProject = async (file: File) => {
+    try {
+      const json = await file.text();
+      const project = parseProjectFile(json);
+      importProject(project);
+    } catch (err) {
+      alert(`Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`);
+    }
+  };
 
   return (
     // Same treatment as PresetsBar: horizontally scrollable on mobile, wraps
@@ -57,6 +84,40 @@ export function ExportBar() {
       >
         JSON
       </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={disabled}
+        className="shrink-0"
+        onClick={() => {
+          const json = exportProject({
+            style, segmentation, blocks, subtitleTracks, activeTrackId,
+            words, textOverlays, overlays, cuts, safeZone, customFonts,
+          });
+          downloadBlob(json, `${baseName}.subifi.json`, 'application/json');
+        }}
+      >
+        Project
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="shrink-0"
+        onClick={() => projectInputRef.current?.click()}
+      >
+        Import
+      </Button>
+      <input
+        ref={projectInputRef}
+        type="file"
+        accept=".json,.subifi.json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void onImportProject(file);
+          e.target.value = '';
+        }}
+      />
     </div>
   );
 }

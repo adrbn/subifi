@@ -22,6 +22,15 @@ import {
 } from './presets';
 import { segmentWords, wordsFromBlocks } from './segmenter';
 import type { SessionSnapshot } from './persist';
+import type { ProjectFile } from './project-file';
+
+function base64ToBuffer(dataUrl: string): ArrayBuffer {
+  const base64 = dataUrl.split(',')[1] ?? '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
 
 // Snapshot of all "editable" state — what undo/redo flips between. Runtime
 // fields like videoUrl, status, currentTime are NOT here on purpose: they
@@ -269,6 +278,7 @@ export type EditorActions = {
   // lib/persist.ts). Recreates a fresh blob URL from the stored File and
   // infers a sensible starting `status` from what was saved.
   hydrate: (snapshot: SessionSnapshot) => void;
+  importProject: (project: ProjectFile) => void;
 };
 
 export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
@@ -962,4 +972,27 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
         lastHistoryAt: 0,
       };
     }),
+
+  importProject: (project) =>
+    set((s) => ({
+      ...pushHistory(s),
+      style: { ...DEFAULT_STYLE, ...project.style },
+      segmentation: project.segmentation,
+      blocks: project.blocks,
+      subtitleTracks: project.subtitleTracks,
+      activeTrackId: project.activeTrackId,
+      words: project.words,
+      textOverlays: project.textOverlays,
+      overlays: project.imageOverlays,
+      cuts: project.cuts,
+      safeZone: project.safeZone,
+      customFonts: project.customFonts.map((f) => ({
+        ...f,
+        buffer: base64ToBuffer(f.dataUrl),
+      })),
+      selectedBlockId: null,
+      selectedOverlayId: null,
+      selectedTextOverlayId: null,
+      status: project.blocks.length > 0 ? 'ready' as const : s.status,
+    })),
 }));
