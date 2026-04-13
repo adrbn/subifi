@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { MediaSidebar } from '@/components/MediaSidebar';
+import { computeSnap, buildGuideTargets, type Guide } from '@/lib/snap';
 import type {
   ImageOverlay,
   SafeZone,
@@ -279,6 +280,7 @@ export function VideoPreview() {
   // the renderer to highlight it, editing opens a textarea in place.
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [activeGuides, setActiveGuides] = useState<Guide[]>([]);
 
   // --- Subtitle drag ---------------------------------------------------------
   const onSubtitlePointerDown = useCallback(
@@ -291,19 +293,32 @@ export function VideoPreview() {
       const rect = containerRef.current.getBoundingClientRect();
 
       const move = (ev: PointerEvent) => {
-        const x = (ev.clientX - rect.left) / rect.width;
-        const y = (ev.clientY - rect.top) / rect.height;
-        setStyle({ positionX: clamp01(x), positionY: clamp01(y) });
+        const rawX = clamp01((ev.clientX - rect.left) / rect.width);
+        const rawY = clamp01((ev.clientY - rect.top) / rect.height);
+        const targets = buildGuideTargets({
+          safeZone,
+          textOverlays: textOverlays.filter(
+            (o) => t >= o.start && t <= o.end,
+          ),
+          imageOverlays: overlays.filter(
+            (o) => t >= o.start - 0.001 && t <= o.end + 0.001,
+          ),
+          excludeSubtitle: true,
+        });
+        const snapped = computeSnap(rawX, rawY, targets);
+        setStyle({ positionX: snapped.x, positionY: snapped.y });
+        setActiveGuides(snapped.guides);
       };
       const up = () => {
         setSubtitleDragging(false);
+        setActiveGuides([]);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     },
-    [setStyle],
+    [setStyle, safeZone, textOverlays, overlays, t],
   );
 
   // --- Subtitle wheel zoom ---------------------------------------------------
@@ -332,19 +347,33 @@ export function VideoPreview() {
       const rect = containerRef.current.getBoundingClientRect();
 
       const move = (ev: PointerEvent) => {
-        const x = (ev.clientX - rect.left) / rect.width;
-        const y = (ev.clientY - rect.top) / rect.height;
-        updateOverlay(ovId, { positionX: clamp01(x), positionY: clamp01(y) });
+        const rawX = clamp01((ev.clientX - rect.left) / rect.width);
+        const rawY = clamp01((ev.clientY - rect.top) / rect.height);
+        const targets = buildGuideTargets({
+          safeZone,
+          textOverlays: textOverlays.filter(
+            (o) => t >= o.start && t <= o.end,
+          ),
+          imageOverlays: overlays.filter(
+            (o) => t >= o.start - 0.001 && t <= o.end + 0.001,
+          ),
+          excludeId: ovId,
+          subtitlePosition: { x: style.positionX, y: style.positionY },
+        });
+        const snapped = computeSnap(rawX, rawY, targets);
+        updateOverlay(ovId, { positionX: snapped.x, positionY: snapped.y });
+        setActiveGuides(snapped.guides);
       };
       const up = () => {
         setDraggingOverlayId(null);
+        setActiveGuides([]);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     },
-    [updateOverlay, selectOverlay],
+    [updateOverlay, selectOverlay, safeZone, textOverlays, overlays, style.positionX, style.positionY, t],
   );
 
   // --- Image overlay wheel zoom ----------------------------------------------
@@ -373,22 +402,36 @@ export function VideoPreview() {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       const rect = containerRef.current.getBoundingClientRect();
       const move = (ev: PointerEvent) => {
-        const x = (ev.clientX - rect.left) / rect.width;
-        const y = (ev.clientY - rect.top) / rect.height;
-        updateTextOverlay(ovId, {
-          positionX: clamp01(x),
-          positionY: clamp01(y),
+        const rawX = clamp01((ev.clientX - rect.left) / rect.width);
+        const rawY = clamp01((ev.clientY - rect.top) / rect.height);
+        const targets = buildGuideTargets({
+          safeZone,
+          textOverlays: textOverlays.filter(
+            (o) => t >= o.start && t <= o.end,
+          ),
+          imageOverlays: overlays.filter(
+            (o) => t >= o.start - 0.001 && t <= o.end + 0.001,
+          ),
+          excludeId: ovId,
+          subtitlePosition: { x: style.positionX, y: style.positionY },
         });
+        const snapped = computeSnap(rawX, rawY, targets);
+        updateTextOverlay(ovId, {
+          positionX: snapped.x,
+          positionY: snapped.y,
+        });
+        setActiveGuides(snapped.guides);
       };
       const up = () => {
         setDraggingTextOverlayId(null);
+        setActiveGuides([]);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     },
-    [editingTextOverlayId, selectTextOverlay, updateTextOverlay],
+    [editingTextOverlayId, selectTextOverlay, updateTextOverlay, safeZone, overlays, style.positionX, style.positionY, t],
   );
 
   // --- Text overlay wheel zoom -----------------------------------------------
@@ -657,6 +700,33 @@ export function VideoPreview() {
           ))}
 
         {/* Subtitle blocks — topmost layer (matching timeline order). */}
+        {/* Snap guide lines — only visible while dragging */}
+        {activeGuides.map((g, i) =>
+          g.axis === 'x' ? (
+            <div
+              key={`guide-${i}`}
+              className="pointer-events-none absolute top-0 bottom-0"
+              style={{
+                left: `${g.position * 100}%`,
+                width: 0,
+                borderLeft: '1px dashed rgba(0, 200, 255, 0.8)',
+                zIndex: 90,
+              }}
+            />
+          ) : (
+            <div
+              key={`guide-${i}`}
+              className="pointer-events-none absolute left-0 right-0"
+              style={{
+                top: `${g.position * 100}%`,
+                height: 0,
+                borderTop: '1px dashed rgba(0, 200, 255, 0.8)',
+                zIndex: 90,
+              }}
+            />
+          ),
+        )}
+
         {currentBlocks.map((blk) => {
           const effectiveStyle = blk.styleOverride
             ? { ...style, ...blk.styleOverride }
