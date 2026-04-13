@@ -751,6 +751,7 @@ export function Timeline() {
                     return;
                   }
                   selectBlock(b.id);
+                  scrub(b.start / videoDuration);
                   window.dispatchEvent(
                     new CustomEvent('subifi:focus-block', {
                       detail: { id: b.id },
