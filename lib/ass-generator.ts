@@ -9,6 +9,15 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 // text dimensions must be measured by the caller (see burn-in.ts
 // measureBlockText()) and passed via `blockMetrics`.
 
+// --- Export visual compensation ---
+// CSS text-shadow outlines (8-directional) create more visual weight than
+// libass vector outlines, making preview text appear ~5-8% larger. And at
+// small preview scale, the same proportional border-radius looks more
+// prominent to the eye. These factors nudge the export to match the
+// perceived preview look.
+const FONT_SIZE_BOOST = 1.06;   // 6% larger font to match CSS text-shadow weight
+const RADIUS_BOOST = 1.4;       // 40% more radius to match small-scale perception
+
 function hexToAssColor(hex: string, alpha = 1): string {
   const h = hex.replace('#', '').padEnd(6, '0');
   const r = h.slice(0, 2).toUpperCase();
@@ -82,7 +91,8 @@ function buildStyleLine(name: string, s: Style, mode: StyleMode = 'auto'): strin
   const italic = s.italic ? -1 : 0;
   const align = alignmentNumber(s.textAlign);
   const spacing = s.letterSpacing ?? 0;
-  return `Style: ${name},${s.fontFamily},${s.fontSize},${primary},${secondary},${outlineCol},${backCol},${bold},${italic},0,0,100,100,${spacing},0,${borderStyle},${outline},0,${align},10,10,10,1`;
+  const boostedFontSize = Math.round(s.fontSize * FONT_SIZE_BOOST);
+  return `Style: ${name},${s.fontFamily},${boostedFontSize},${primary},${secondary},${outlineCol},${backCol},${bold},${italic},0,0,100,100,${spacing},0,${borderStyle},${outline},0,${align},10,10,10,1`;
 }
 
 // Build the karaoke-tagged dialogue text for a block. Each word becomes
@@ -382,9 +392,12 @@ export function generateAss({
       const metrics = blockMetrics!.get(i)!;
       const padX = merged.backgroundPaddingX;
       const padY = merged.backgroundPaddingY;
-      const radius = merged.backgroundRadius ?? 0;
-      const boxW = metrics.width + padX * 2;
-      const boxH = metrics.height + padY * 2;
+      const radius = Math.round((merged.backgroundRadius ?? 0) * RADIUS_BOOST);
+      const boostedFs = Math.round(merged.fontSize * FONT_SIZE_BOOST);
+      // Scale box to match the boosted font size so background fits text.
+      const fontRatio = FONT_SIZE_BOOST;
+      const boxW = metrics.width * fontRatio + padX * 2;
+      const boxH = metrics.height * fontRatio + padY * 2;
       const boxX = Math.round(posX - boxW / 2);
       const boxY = Math.round(posY - boxH / 2);
       const drawPath = roundedRectDraw(boxW, boxH, radius);
@@ -400,7 +413,6 @@ export function generateAss({
       const txtStyleName = hasOverride ? `B${i}` : 'Default_TXT';
 
       // Layer 0: drawn rounded-rect background via \p1.
-      // DrawBG style has FontSize=64 so 1 drawing unit = 1 PlayRes pixel.
       const bgInline =
         `{\\pos(${boxX},${boxY})` +
         `\\1c&H${bgB}${bgG}${bgR}&` +
@@ -408,10 +420,8 @@ export function generateAss({
         `\\bord0\\shad0\\p1}`;
       events.push(`Dialogue: 0,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
 
-      // Layer 1: text with outline only (no background box).
-      // Explicit \fs ensures libass uses the intended size regardless of
-      // style resolution or font-metric quirks.
-      const txtInline = `{\\pos(${posX},${posY})\\fs${merged.fontSize}}`;
+      // Layer 1: text with outline only. Boosted \fs for visual parity.
+      const txtInline = `{\\pos(${posX},${posY})\\fs${boostedFs}}`;
       events.push(`Dialogue: 1,${start},${end},${txtStyleName},,0,0,0,,${txtInline}${text}`);
     } else {
       // --- Single-layer (no radius or no metrics) ---
@@ -420,7 +430,8 @@ export function generateAss({
       const bordOverrides = hasBg
         ? `\\xbord${merged.backgroundPaddingX}\\ybord${merged.backgroundPaddingY}`
         : '';
-      const inline = `{\\pos(${posX},${posY})\\fs${merged.fontSize}${bordOverrides}}`;
+      const boostedFs = Math.round(merged.fontSize * FONT_SIZE_BOOST);
+      const inline = `{\\pos(${posX},${posY})\\fs${boostedFs}${bordOverrides}}`;
       events.push(`Dialogue: 0,${start},${end},${styleName},,0,0,0,,${inline}${text}`);
     }
   });
@@ -445,11 +456,13 @@ export function generateAss({
       const metrics = textOverlayMetrics!.get(i)!;
       const padX = t.backgroundPaddingX;
       const padY = t.backgroundPaddingY;
-      const boxW = metrics.width + padX * 2;
-      const boxH = metrics.height + padY * 2;
+      const radius = Math.round((t.backgroundRadius ?? 0) * RADIUS_BOOST);
+      const fontRatio = FONT_SIZE_BOOST;
+      const boxW = metrics.width * fontRatio + padX * 2;
+      const boxH = metrics.height * fontRatio + padY * 2;
       const boxX = Math.round(tx - boxW / 2);
       const boxY = Math.round(ty - boxH / 2);
-      const drawPath = roundedRectDraw(boxW, boxH, t.backgroundRadius);
+      const drawPath = roundedRectDraw(boxW, boxH, radius);
 
       const bgHex = t.backgroundColor.replace('#', '').padEnd(6, '0');
       const bgB = bgHex.slice(4, 6).toUpperCase();
@@ -458,19 +471,21 @@ export function generateAss({
       const bgAlpha = Math.round((1 - t.backgroundOpacity) * 255)
         .toString(16).padStart(2, '0').toUpperCase();
 
+      const boostedFs = Math.round(t.fontSize * FONT_SIZE_BOOST);
       const bgInline =
         `{\\pos(${boxX},${boxY})` +
         `\\1c&H${bgB}${bgG}${bgR}&` +
         `\\1a&H${bgAlpha}&` +
         `\\bord0\\shad0\\p1}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
-      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${tx},${ty})\\fs${t.fontSize}}${text}`);
+      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${tx},${ty})\\fs${boostedFs}}${text}`);
     } else {
       const hasBg = t.backgroundOpacity > 0;
       const bordOverrides = hasBg
         ? `\\xbord${t.backgroundPaddingX}\\ybord${t.backgroundPaddingY}`
         : '';
-      const inline = `{\\pos(${tx},${ty})\\fs${t.fontSize}${bordOverrides}}`;
+      const boostedFs = Math.round(t.fontSize * FONT_SIZE_BOOST);
+      const inline = `{\\pos(${tx},${ty})\\fs${boostedFs}${bordOverrides}}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},TO${i},,0,0,0,,${inline}${text}`);
     }
   });
