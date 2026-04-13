@@ -610,7 +610,13 @@ export function Timeline() {
               track.id === activeTrackId ? 'bg-accent/10' : ''
             }`}
             style={{ height: laneH }}
-            onClick={() => setActiveTrack(track.id)}
+            onClick={() => {
+              setActiveTrack(track.id);
+              // Deselect individual block + text overlay so the StylePanel
+              // switches to "global subtitle style" editing mode.
+              selectBlock(null);
+              selectTextOverlay(null);
+            }}
           >
             <button
               type="button"

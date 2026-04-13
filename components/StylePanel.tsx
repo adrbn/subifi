@@ -2,16 +2,21 @@
 
 import { useRef } from 'react';
 import { useEditor } from '@/lib/store';
-import type { SafeZonePreset } from '@/lib/types';
+import type { SafeZonePreset, Style } from '@/lib/types';
 import { FontPicker } from './FontPicker';
 import { Slider } from './ui/slider';
 import { Select } from './ui/select';
 import { Button } from './ui/button';
+import { GOOGLE_FONTS, loadGoogleFont } from '@/lib/google-fonts';
 
-// Right-side panel: all style knobs. When a text overlay is selected the
-// controls edit that overlay's properties; otherwise they edit the global
-// subtitle style. Every change is immediately reflected in the VideoPreview
-// because both read from the same Zustand store.
+// Right-side panel: all style knobs. Three editing modes:
+//
+//   1. Text overlay selected → controls edit that overlay's properties
+//   2. Subtitle block selected → controls edit that block's styleOverride
+//   3. Nothing selected → controls edit the global subtitle style
+//
+// Every change is immediately reflected in the VideoPreview because both
+// read from the same Zustand store.
 
 function ColorField({
   label,
@@ -51,6 +56,10 @@ export function StylePanel() {
   const {
     style,
     setStyle,
+    blocks,
+    selectedBlockId,
+    selectBlock,
+    updateBlock,
     overlays,
     addOverlay,
     updateOverlay,
@@ -88,41 +97,62 @@ export function StylePanel() {
     });
   };
 
-  // Find the currently selected text overlay (if any).
+  // --- Mode detection ---
+  // Priority: text overlay > selected subtitle block > global
   const selectedText = selectedTextOverlayId
     ? textOverlays.find((t) => t.id === selectedTextOverlayId)
     : null;
+  const selectedBlock = !selectedText && selectedBlockId
+    ? blocks.find((b) => b.id === selectedBlockId)
+    : null;
 
-  // When a text overlay is selected, the main style controls edit it.
   const isTextMode = !!selectedText;
+  const isBlockMode = !!selectedBlock;
+  const isGlobalMode = !isTextMode && !isBlockMode;
+
+  // Effective style values: merge block override on top of global for display
+  const blockStyle: Style | null = selectedBlock
+    ? { ...style, ...(selectedBlock.styleOverride ?? {}) }
+    : null;
 
   // Helpers to read/write the active style target.
   const val = {
-    fontFamily: isTextMode ? selectedText!.fontFamily : style.fontFamily,
-    fontSize: isTextMode ? selectedText!.fontSize : style.fontSize,
-    fontWeight: isTextMode ? selectedText!.fontWeight : style.fontWeight,
-    italic: isTextMode ? selectedText!.italic : style.italic,
-    textAlign: isTextMode ? selectedText!.textAlign : style.textAlign,
-    textColor: isTextMode ? selectedText!.textColor : style.textColor,
-    textOutlineColor: isTextMode ? selectedText!.textOutlineColor : style.textOutlineColor,
-    textOutlineWidth: isTextMode ? selectedText!.textOutlineWidth : style.textOutlineWidth,
-    backgroundColor: isTextMode ? selectedText!.backgroundColor : style.backgroundColor,
-    backgroundOpacity: isTextMode ? selectedText!.backgroundOpacity : style.backgroundOpacity,
-    backgroundPaddingX: isTextMode ? selectedText!.backgroundPaddingX : style.backgroundPaddingX,
-    backgroundPaddingY: isTextMode ? selectedText!.backgroundPaddingY : style.backgroundPaddingY,
-    backgroundRadius: isTextMode ? selectedText!.backgroundRadius : style.backgroundRadius,
-    positionX: isTextMode ? selectedText!.positionX : style.positionX,
-    positionY: isTextMode ? selectedText!.positionY : style.positionY,
-    maxWidth: isTextMode ? selectedText!.maxWidth : style.maxWidth,
+    fontFamily: isTextMode ? selectedText!.fontFamily : isBlockMode ? blockStyle!.fontFamily : style.fontFamily,
+    fontSize: isTextMode ? selectedText!.fontSize : isBlockMode ? blockStyle!.fontSize : style.fontSize,
+    fontWeight: isTextMode ? selectedText!.fontWeight : isBlockMode ? blockStyle!.fontWeight : style.fontWeight,
+    italic: isTextMode ? selectedText!.italic : isBlockMode ? (blockStyle!.italic ?? style.italic) : style.italic,
+    textAlign: isTextMode ? selectedText!.textAlign : isBlockMode ? (blockStyle!.textAlign ?? style.textAlign) : style.textAlign,
+    textColor: isTextMode ? selectedText!.textColor : isBlockMode ? blockStyle!.textColor : style.textColor,
+    textOutlineColor: isTextMode ? selectedText!.textOutlineColor : isBlockMode ? blockStyle!.textOutlineColor : style.textOutlineColor,
+    textOutlineWidth: isTextMode ? selectedText!.textOutlineWidth : isBlockMode ? blockStyle!.textOutlineWidth : style.textOutlineWidth,
+    backgroundColor: isTextMode ? selectedText!.backgroundColor : isBlockMode ? blockStyle!.backgroundColor : style.backgroundColor,
+    backgroundOpacity: isTextMode ? selectedText!.backgroundOpacity : isBlockMode ? blockStyle!.backgroundOpacity : style.backgroundOpacity,
+    backgroundPaddingX: isTextMode ? selectedText!.backgroundPaddingX : isBlockMode ? (blockStyle!.backgroundPaddingX ?? style.backgroundPaddingX) : style.backgroundPaddingX,
+    backgroundPaddingY: isTextMode ? selectedText!.backgroundPaddingY : isBlockMode ? (blockStyle!.backgroundPaddingY ?? style.backgroundPaddingY) : style.backgroundPaddingY,
+    backgroundRadius: isTextMode ? selectedText!.backgroundRadius : isBlockMode ? (blockStyle!.backgroundRadius ?? style.backgroundRadius) : style.backgroundRadius,
+    positionX: isTextMode ? selectedText!.positionX : isBlockMode ? (blockStyle!.positionX ?? style.positionX) : style.positionX,
+    positionY: isTextMode ? selectedText!.positionY : isBlockMode ? blockStyle!.positionY : style.positionY,
+    maxWidth: isTextMode ? selectedText!.maxWidth : isBlockMode ? blockStyle!.maxWidth : style.maxWidth,
   };
 
   const set = (patch: Record<string, unknown>) => {
     if (isTextMode) {
       updateTextOverlay(selectedText!.id, patch);
+    } else if (isBlockMode) {
+      // Merge into the block's styleOverride
+      updateBlock(selectedBlock!.id, {
+        styleOverride: { ...(selectedBlock!.styleOverride ?? {}), ...patch } as Partial<Style>,
+      });
     } else {
       setStyle(patch);
     }
   };
+
+  const modeLabel = isTextMode
+    ? 'Text layer style'
+    : isBlockMode
+      ? 'Subtitle block style'
+      : 'Subtitle style';
 
   return (
     <div
@@ -132,7 +162,7 @@ export function StylePanel() {
       {/* Mode indicator */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
-          {isTextMode ? 'Text layer style' : 'Subtitle style'}
+          {modeLabel}
         </h3>
         {isTextMode && (
           <button
@@ -143,7 +173,37 @@ export function StylePanel() {
             Back to subs
           </button>
         )}
+        {isBlockMode && (
+          <div className="flex items-center gap-2">
+            {selectedBlock!.styleOverride &&
+              Object.keys(selectedBlock!.styleOverride).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateBlock(selectedBlock!.id, { styleOverride: undefined })
+                  }
+                  className="text-[10px] text-text-muted hover:text-text"
+                >
+                  Reset to global
+                </button>
+              )}
+            <button
+              type="button"
+              onClick={() => selectBlock(null)}
+              className="text-[10px] text-text-muted hover:text-text"
+            >
+              Back to global
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Block info hint */}
+      {isBlockMode && (
+        <div className="rounded bg-accent/10 px-2 py-1 text-[10px] text-text-muted">
+          Editing block: &ldquo;{selectedBlock!.text.slice(0, 40)}{selectedBlock!.text.length > 40 ? '...' : ''}&rdquo;
+        </div>
+      )}
 
       {/* Text content + timing — only shown in text overlay mode */}
       {isTextMode && (
@@ -190,19 +250,26 @@ export function StylePanel() {
       )}
 
       <FontPicker
-        compact={isTextMode}
+        compact={isTextMode || isBlockMode}
         value={
           isTextMode
             ? { family: selectedText!.fontFamily, weight: selectedText!.fontWeight }
-            : undefined
+            : isBlockMode
+              ? { family: blockStyle!.fontFamily, weight: blockStyle!.fontWeight }
+              : undefined
         }
-        onChange={(family) => set({ fontFamily: family })}
+        onChange={(family) => {
+          if ((isBlockMode || isGlobalMode) && GOOGLE_FONTS.includes(family)) {
+            loadGoogleFont(family, val.fontWeight);
+          }
+          set({ fontFamily: family });
+        }}
       />
 
       <Slider
         label="Font size"
         min={isTextMode ? 12 : 16}
-        max={isTextMode ? 200 : 120}
+        max={isTextMode ? 200 : isBlockMode ? 300 : 120}
         value={val.fontSize}
         unit="px"
         onChange={(v) => set({ fontSize: v })}
@@ -241,7 +308,7 @@ export function StylePanel() {
         </Select>
       </div>
 
-      {/* Line height / letter / word spacing — subtitle-only for now */}
+      {/* Line height / letter / word spacing — subtitle-only (global or per-block) */}
       {!isTextMode && (
         <>
           <Slider
@@ -249,25 +316,25 @@ export function StylePanel() {
             min={80}
             max={220}
             step={5}
-            value={Math.round((style.lineHeight ?? 1.2) * 100)}
+            value={Math.round(((isBlockMode ? blockStyle!.lineHeight : style.lineHeight) ?? 1.2) * 100)}
             unit="%"
-            onChange={(v) => setStyle({ lineHeight: v / 100 })}
+            onChange={(v) => set({ lineHeight: v / 100 })}
           />
           <Slider
             label="Letter spacing"
             min={-5}
             max={20}
-            value={style.letterSpacing ?? 0}
+            value={(isBlockMode ? blockStyle!.letterSpacing : style.letterSpacing) ?? 0}
             unit="px"
-            onChange={(v) => setStyle({ letterSpacing: v })}
+            onChange={(v) => set({ letterSpacing: v })}
           />
           <Slider
             label="Word spacing"
             min={-5}
             max={30}
-            value={style.wordSpacing ?? 0}
+            value={(isBlockMode ? blockStyle!.wordSpacing : style.wordSpacing) ?? 0}
             unit="px"
-            onChange={(v) => setStyle({ wordSpacing: v })}
+            onChange={(v) => set({ wordSpacing: v })}
           />
         </>
       )}
@@ -280,15 +347,15 @@ export function StylePanel() {
             <span className="text-xs text-text-muted">Karaoke (word-pop)</span>
             <input
               type="checkbox"
-              checked={style.karaoke}
-              onChange={(e) => setStyle({ karaoke: e.target.checked })}
+              checked={isBlockMode ? (blockStyle!.karaoke ?? style.karaoke) : style.karaoke}
+              onChange={(e) => set({ karaoke: e.target.checked })}
             />
           </div>
-          {style.karaoke && (
+          {(isBlockMode ? (blockStyle!.karaoke ?? style.karaoke) : style.karaoke) && (
             <ColorField
               label="Unspoken color"
-              value={style.karaokeBaseColor}
-              onChange={(v) => setStyle({ karaokeBaseColor: v })}
+              value={isBlockMode ? (blockStyle!.karaokeBaseColor ?? style.karaokeBaseColor) : style.karaokeBaseColor}
+              onChange={(v) => set({ karaokeBaseColor: v })}
             />
           )}
         </>
