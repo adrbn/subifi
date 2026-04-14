@@ -99,6 +99,9 @@ export type EditorState = {
   status: Status;
   error: string | null;
   progress: number; // 0..1, used for extraction / burning
+  // When transcription chunks a long audio file, surface "X of N" so the UI
+  // can show more than a lonely progress bar. null when not chunking.
+  transcribeChunks: { done: number; total: number } | null;
   currentTime: number; // playback position in seconds
 
   // Undo/redo history. `past` is oldest→newest of pre-mutation snapshots;
@@ -278,6 +281,7 @@ export type EditorActions = {
   visibleBlocks: () => SubtitleBlock[];
   setStatus: (status: Status, error?: string | null) => void;
   setProgress: (progress: number) => void;
+  setTranscribeChunks: (chunks: { done: number; total: number } | null) => void;
   setExportModalOpen: (open: boolean) => void;
   setCurrentTime: (t: number) => void;
   // Undo / redo. Both no-op when their stack is empty.
@@ -328,6 +332,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
   status: 'idle',
   error: null,
   progress: 0,
+  transcribeChunks: null,
   currentTime: 0,
 
   past: [],
@@ -867,6 +872,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   setStatus: (status, error = null) => set({ status, error }),
   setProgress: (progress) => set({ progress }),
+  setTranscribeChunks: (chunks) => set({ transcribeChunks: chunks }),
   setExportModalOpen: (open) => set({ exportModalOpen: open }),
   setCurrentTime: (t) => set({ currentTime: t }),
 

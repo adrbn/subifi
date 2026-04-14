@@ -1,11 +1,15 @@
 import { getFFmpeg } from './ffmpeg-client';
 
-// Splits an extracted Opus/Ogg audio track into ~20-minute chunks so each
-// upload stays well under Groq's 25 MB limit. At 64 kbps mono a 20-minute
-// chunk is ~9.6 MB. We stream-copy (`-c copy`) so there's no re-encode cost.
+// Splits an extracted Opus/Ogg audio track into ~8-minute chunks so each
+// upload stays under the tightest body-size cap in the pipeline. Groq
+// accepts up to 25 MB, but Vercel Serverless Functions cap the request
+// body at 4.5 MB on Hobby/Pro (default), so that's the real constraint
+// once deployed. At 64 kbps mono an 8-minute chunk is ~3.8 MB — well
+// under 4.5 with headroom for container overhead. We stream-copy
+// (`-c copy`) so there's no re-encode cost.
 
 const INPUT_NAME = 'chunk_input.ogg';
-const CHUNK_SECONDS = 1200;
+const CHUNK_SECONDS = 480;
 
 export type AudioChunk = { bytes: Uint8Array; startSec: number };
 

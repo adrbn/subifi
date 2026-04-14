@@ -24,9 +24,11 @@ export function TranscribeButton() {
     extractedAudio,
     videoDuration,
     status,
+    transcribeChunks,
     setWords,
     setStatus,
     setProgress,
+    setTranscribeChunks,
   } = useEditor();
 
   const [elapsed, setElapsed] = useState(0);
@@ -47,7 +49,9 @@ export function TranscribeButton() {
       setElapsed(ms);
       // Estimated progress based on 100× realtime — never reaches 1, tops
       // out at 0.95 so the bar doesn't sit at "done" while Groq is still
-      // working.
+      // working. Skipped when we have real chunk-based progress, which is
+      // authoritative for long audio.
+      if (transcribeChunks) return;
       if (videoDuration > 0) {
         const estTotalMs = (videoDuration / REALTIME_FACTOR) * 1000;
         const ratio = Math.min(0.95, ms / Math.max(estTotalMs, 1));
@@ -55,17 +59,21 @@ export function TranscribeButton() {
       }
     }, 200);
     return () => clearInterval(id);
-  }, [status, videoDuration, setProgress]);
+  }, [status, videoDuration, setProgress, transcribeChunks]);
 
   const transcribe = useCallback(async () => {
     if (!extractedAudio) return;
     setStatus('transcribing', null);
     setProgress(0);
+    setTranscribeChunks(null);
     try {
       const words = await transcribeAudio(
         extractedAudio,
         videoDuration,
-        (done, total) => setProgress(total > 0 ? done / total : 0),
+        (done, total) => {
+          setProgress(total > 0 ? done / total : 0);
+          setTranscribeChunks(total > 1 ? { done, total } : null);
+        },
       );
       if (words.length === 0) {
         throw new Error(
@@ -77,8 +85,10 @@ export function TranscribeButton() {
     } catch (e) {
       console.error('[transcribe] failed', e);
       setStatus('error', e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setTranscribeChunks(null);
     }
-  }, [extractedAudio, videoDuration, setStatus, setProgress, setWords]);
+  }, [extractedAudio, videoDuration, setStatus, setProgress, setWords, setTranscribeChunks]);
 
   if (status !== 'audio-ready' && status !== 'transcribing') return null;
   // Banner was dismissed — transcribe is still reachable from the subtitle tab.
@@ -134,7 +144,9 @@ export function TranscribeButton() {
         <>
           <div className="flex min-w-0 flex-col">
             <div className="text-sm font-medium text-text">
-              Transcription en cours…
+              {transcribeChunks && transcribeChunks.total > 1
+                ? `Transcription (chunk ${transcribeChunks.done + 1}/${transcribeChunks.total})…`
+                : 'Transcription en cours…'}
             </div>
             <div className="text-xs text-text-muted">
               {formatElapsed(elapsed)}
@@ -147,12 +159,14 @@ export function TranscribeButton() {
                 className="h-full bg-accent transition-[width] duration-200"
                 style={{
                   width: `${Math.round(
-                    Math.min(
-                      0.95,
-                      videoDuration > 0
-                        ? elapsed / ((videoDuration / REALTIME_FACTOR) * 1000)
-                        : elapsed / 60000,
-                    ) * 100,
+                    (transcribeChunks
+                      ? transcribeChunks.done / Math.max(transcribeChunks.total, 1)
+                      : Math.min(
+                          0.95,
+                          videoDuration > 0
+                            ? elapsed / ((videoDuration / REALTIME_FACTOR) * 1000)
+                            : elapsed / 60000,
+                        )) * 100,
                   )}%`,
                 }}
               />
@@ -167,18 +181,29 @@ export function TranscribeButton() {
 // Compact transcribe button for the subtitle list empty state. Triggers
 // the same transcription flow without the full banner.
 export function TranscribeInlineButton() {
-  const { extractedAudio, status, setWords, setStatus, setProgress, videoDuration } =
-    useEditor();
+  const {
+    extractedAudio,
+    status,
+    setWords,
+    setStatus,
+    setProgress,
+    setTranscribeChunks,
+    videoDuration,
+  } = useEditor();
 
   const transcribe = useCallback(async () => {
     if (!extractedAudio) return;
     setStatus('transcribing', null);
     setProgress(0);
+    setTranscribeChunks(null);
     try {
       const words = await transcribeAudio(
         extractedAudio,
         videoDuration,
-        (done, total) => setProgress(total > 0 ? done / total : 0),
+        (done, total) => {
+          setProgress(total > 0 ? done / total : 0);
+          setTranscribeChunks(total > 1 ? { done, total } : null);
+        },
       );
       if (words.length === 0) {
         throw new Error(
@@ -190,8 +215,10 @@ export function TranscribeInlineButton() {
     } catch (e) {
       console.error('[transcribe] failed', e);
       setStatus('error', e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setTranscribeChunks(null);
     }
-  }, [extractedAudio, videoDuration, setStatus, setProgress, setWords]);
+  }, [extractedAudio, videoDuration, setStatus, setProgress, setWords, setTranscribeChunks]);
 
   if (status !== 'audio-ready') return null;
 

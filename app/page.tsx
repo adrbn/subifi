@@ -54,6 +54,7 @@ export default function Page() {
     clearVideo,
     status,
     progress,
+    transcribeChunks,
     error,
     setStatus,
     undo,
@@ -353,13 +354,17 @@ export default function Page() {
           {(status === 'extracting' ||
             status === 'transcribing' ||
             status === 'burning') && (
-            <div className="hidden items-center gap-2 text-xs text-text-muted md:flex">
-              <span>
+            <div className="flex items-center gap-2 text-xs text-text-muted">
+              <span className="truncate">
                 {status === 'extracting' && 'Extracting audio'}
-                {status === 'transcribing' && 'Transcribing'}
+                {status === 'transcribing' && (
+                  transcribeChunks && transcribeChunks.total > 1
+                    ? `Transcribing ${transcribeChunks.done}/${transcribeChunks.total}`
+                    : 'Transcribing'
+                )}
                 {status === 'burning' && 'Rendering video'}
               </span>
-              <div className="h-1.5 w-36 overflow-hidden rounded-full bg-bg-hi">
+              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-bg-hi sm:w-36">
                 <div
                   className="h-full bg-accent transition-[width] duration-200"
                   style={{ width: `${Math.round(progress * 100)}%` }}

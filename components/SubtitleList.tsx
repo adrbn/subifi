@@ -32,6 +32,7 @@ export function SubtitleList() {
     currentTime,
     status,
     progress,
+    transcribeChunks,
     selectedBlockId,
     selectBlock,
   } = useEditor();
@@ -81,7 +82,10 @@ export function SubtitleList() {
       label = `Extracting audio… ${Math.round(progress * 100)}%`;
     else if (status === 'audio-ready')
       label = 'Audio extracted — click "Transcrire automatiquement par IA" above.';
-    else if (status === 'transcribing') label = 'Transcribing with Groq…';
+    else if (status === 'transcribing')
+      label = transcribeChunks && transcribeChunks.total > 1
+        ? `Transcribing with Groq — chunk ${transcribeChunks.done + 1} of ${transcribeChunks.total}…`
+        : 'Transcribing with Groq…';
     else if (status === 'error') label = 'Something went wrong — see the banner above.';
     else if (status === 'ready')
       label = 'Transcription returned no words. Try a different clip?';

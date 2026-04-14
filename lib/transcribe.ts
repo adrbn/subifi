@@ -8,9 +8,11 @@ import { splitAudioBytes } from './audio-chunk';
 export type Word = { text: string; start: number; end: number };
 export type TranscribeProgress = (done: number, total: number) => void;
 
-// 20 MB — leaves headroom under the 24 MB server-side guard for container
-// overhead and rate-limit retry bloat.
-const SINGLE_SHOT_THRESHOLD_BYTES = 20 * 1024 * 1024;
+// 4 MB — Vercel Serverless Functions reject bodies >4.5 MB by default on
+// Hobby/Pro. Anything larger MUST be chunked or the deployed site returns
+// 413 before the handler ever runs. Local dev could go higher, but the
+// same threshold keeps behavior identical across environments.
+const SINGLE_SHOT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 async function postChunk(
   bytes: Uint8Array,
