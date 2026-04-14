@@ -18,7 +18,10 @@ const STORAGE_KEY = 'subifi:tour-done-v1';
 type Step = {
   selector: string;
   title: string;
-  body: string;
+  // One-line headline shown above the bullet list.
+  lead: string;
+  // Short, scannable bullets — keep each under ~60 chars.
+  bullets: string[];
   // Where to anchor the tooltip relative to the target. We auto-flip if
   // the chosen side runs off the viewport.
   placement?: 'top' | 'bottom' | 'left' | 'right';
@@ -27,38 +30,68 @@ type Step = {
 const STEPS: Step[] = [
   {
     selector: '[data-tour="preview"]',
-    title: 'Preview',
-    body: 'Your video with all overlays. Drag the subtitle to reposition · scroll to resize · double-click to edit text in place. The corner button enters fullscreen WITH the overlays.',
+    title: 'Live preview',
+    lead: 'What the export will look like, in real time.',
+    bullets: [
+      'Drag subtitle to move · scroll to resize',
+      'Double-click to edit text',
+      'Space = play / pause',
+    ],
     placement: 'bottom',
   },
   {
     selector: '[data-tour="media-sidebar"]',
-    title: 'Add media',
-    body: 'Quick adds: T for a free-form text overlay, image icon for logos / stickers / watermarks. Drag them on the preview to position.',
+    title: 'Add overlays',
+    lead: 'Stuff that isn\'t in the transcript.',
+    bullets: [
+      'T → free-form text label',
+      'Image icon → logo, sticker, watermark',
+      'Drag them on the preview to place',
+    ],
     placement: 'right',
   },
   {
     selector: '[data-tour="presets"]',
     title: 'Presets',
-    body: 'One-click style presets (TikTok, Karaoke, News…) and segmentation modes (Cinéma, TikTok, 1 mot). Save your own once you tune a look.',
+    lead: 'One-click looks and segmentation modes.',
+    bullets: [
+      'Top row: visual presets (TikTok, Karaoke…)',
+      'Bottom row: how cues are split (Cinéma, 1 mot…)',
+      'Save your own once you tune a look',
+    ],
     placement: 'top',
   },
   {
     selector: '[data-tour="timeline"]',
     title: 'Timeline',
-    body: 'Click to scrub. Drag a clip to slide it (it snaps to neighbors), drag an edge to trim. Add free text or cuts from the buttons. Click a subtitle to focus it everywhere.',
+    lead: 'Scrub, trim, and arrange.',
+    bullets: [
+      'Click to scrub the playhead',
+      'Drag a clip to slide · drag its edge to trim',
+      'Mark sections to cut from the export',
+    ],
     placement: 'top',
   },
   {
     selector: '[data-tour="style-panel"]',
     title: 'Style panel',
-    body: 'Every style knob (font, colors, outline, position, dead zones, image / text overlays). Mobile users get this as a bottom tab.',
+    lead: 'Every visual knob lives here.',
+    bullets: [
+      'Font, colors, outline, background, position',
+      'Edits apply to all subs — select one to override',
+      'Mobile: opens as the bottom “Style” tab',
+    ],
     placement: 'left',
   },
   {
     selector: '[data-tour="export"]',
-    title: 'Export',
-    body: 'Burn the styled subtitles into a fresh MP4. Cuts get stitched out automatically. The progress bar in the header tracks the encode.',
+    title: 'Export to MP4',
+    lead: 'Burns subtitles into a fresh video file.',
+    bullets: [
+      'Cuts are stitched out automatically',
+      'Encodes in your browser — nothing uploaded',
+      'Progress shows in the header bar',
+    ],
     placement: 'bottom',
   },
 ];
@@ -67,15 +100,21 @@ type Rect = { top: number; left: number; width: number; height: number };
 
 function getRect(selector: string): Rect | null {
   if (typeof document === 'undefined') return null;
-  const el = document.querySelector(selector);
-  if (!el) return null;
-  const r = (el as HTMLElement).getBoundingClientRect();
-  return {
-    top: r.top,
-    left: r.left,
-    width: r.width,
-    height: r.height,
-  };
+  // IMPORTANT: several `data-tour` anchors are duplicated in the DOM — the
+  // mobile and desktop layouts each render their own StylePanel (one is
+  // hidden via Tailwind's `hidden` class at any given breakpoint). A naive
+  // `querySelector` returns the first match, which on desktop is the hidden
+  // mobile panel — its `getBoundingClientRect()` is all zeros, the tooltip
+  // then auto-flips and clamps itself to the top-left corner. Walk all
+  // matches and take the first one with non-zero size.
+  const els = document.querySelectorAll(selector);
+  for (const el of Array.from(els)) {
+    const r = (el as HTMLElement).getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      return { top: r.top, left: r.left, width: r.width, height: r.height };
+    }
+  }
+  return null;
 }
 
 export function OnboardingTour({ ready }: { ready: boolean }) {
@@ -170,7 +209,7 @@ export function OnboardingTour({ ready }: { ready: boolean }) {
   // position from the target rect + chosen placement, then auto-flip if
   // the chosen side would push the card off-screen.
   const TIP_W = 320;
-  const TIP_H = 160;
+  const TIP_H = 200; // approximate — title + lead + ~3 bullets + buttons
   const PAD = 14;
 
   let tipTop = viewport.h / 2 - TIP_H / 2;
@@ -273,7 +312,15 @@ export function OnboardingTour({ ready }: { ready: boolean }) {
             {stepIdx + 1} / {STEPS.length}
           </div>
         </div>
-        <div className="mb-3 text-xs leading-relaxed text-text">{step.body}</div>
+        <div className="mb-2 text-xs leading-snug text-text">{step.lead}</div>
+        <ul className="mb-3 space-y-1 text-[11px] leading-snug text-text-muted">
+          {step.bullets.map((b, i) => (
+            <li key={i} className="flex gap-1.5">
+              <span className="text-accent">·</span>
+              <span>{b}</span>
+            </li>
+          ))}
+        </ul>
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"

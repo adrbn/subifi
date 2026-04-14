@@ -35,3 +35,6 @@ next-env.d.ts
 
 # superpowers brainstorm session state
 .superpowers/
+
+# local claude session state
+.claude/

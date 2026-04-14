@@ -46,6 +46,11 @@ npm run dev
      video using the `subtitles` (libass) filter. Uses the multi-threaded
      ffmpeg core with a 1080p short-side cap and the `ultrafast` x264 preset,
      so a typical phone clip burns in a handful of seconds.
+   - **Project (`.subifi.json`)** — full editor state (blocks, tracks, style,
+     overlays, cuts, custom fonts) plus a manifest referencing the source
+     video by head-hash. On re-import the video is auto-rehydrated from the
+     IndexedDB cache (up to 2 GB LRU); if the cache misses, a modal prompts
+     for the source file and soft-warns on hash mismatch.
 
 ## Tech
 
@@ -55,7 +60,8 @@ npm run dev
 - **ffmpeg.wasm** (multi-threaded core) for audio extraction and subtitle
   burn-in
 - **Groq SDK** for Whisper transcription
-- **IndexedDB** for session persistence
+- **IndexedDB** for session persistence and the video cache that powers
+  project re-imports
 
 ## Notes
 
@@ -72,14 +78,26 @@ npm run dev
   "New video" clears both in-memory state and the persisted snapshot.
 - The mobile layout uses horizontally scrollable preset/export strips, a
   stacked transcribe CTA, and a bottom tab bar to swap between the subtitle
-  list and the style panel.
+  list and the style panel. The timeline lanes fill the available vertical
+  space and collapse to a compact height when empty.
+- **Shared preset library**: `GET /api/presets` returns a public community
+  list; `POST /api/presets` publishes a user's saved style. Backed by a
+  pluggable `SharedPresetStore` (`lib/shared-presets-store.ts`) — the
+  default in-memory implementation is a one-line swap away from Vercel KV,
+  Upstash, or Supabase.
+- **Curated fonts**: Marianne (the French DSFR typeface) is available
+  first-class alongside Google Fonts, with a variant picker for weight +
+  italic combinations. Burn-in currently falls back to the default font
+  for curated families because libass in `ffmpeg.wasm` requires TTF and
+  DSFR only ships WOFF2; the preview renders Marianne correctly.
 
 ## Out of scope (for now)
 
 - Speaker diarization
-- Waveform in the timeline
-- Undo/redo
-- Multi-project persistence / authentication
+- Authenticated multi-user storage for the shared preset library (the
+  current endpoint is public and no-auth by design)
+- Burning curated WOFF2-only fonts into the MP4 (needs a WOFF2→TTF
+  transcode path before libass will accept them)
 
 See `docs/superpowers/specs/2026-04-09-subifi-design.md` for the full design
 rationale.

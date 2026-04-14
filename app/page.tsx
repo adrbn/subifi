@@ -19,6 +19,7 @@ import { ExportBar } from '@/components/ExportBar';
 import { TranslateBar } from '@/components/TranslateBar';
 import { TranscribeButton } from '@/components/TranscribeButton';
 import { ExportMp4Button } from '@/components/ExportMp4Button';
+import { ExportModal } from '@/components/ExportModal';
 import { FeedbackButton } from '@/components/FeedbackButton';
 import { MediaSidebar } from '@/components/MediaSidebar';
 import { OnboardingTour } from '@/components/OnboardingTour';
@@ -27,13 +28,13 @@ import { Button } from '@/components/ui/button';
 // Clamp helpers for the draggable preview/bottom splitter (desktop only).
 const PREVIEW_PCT_MIN = 25;
 const PREVIEW_PCT_MAX = 85;
-const PREVIEW_PCT_DEFAULT = 62;
+const PREVIEW_PCT_DEFAULT = 55;
 const PREVIEW_PCT_STORAGE_KEY = 'subifi:previewPct';
 
 // Vertical splitter: timeline (left) vs subtitle list (right).
 const TIMELINE_PCT_MIN = 25;
 const TIMELINE_PCT_MAX = 80;
-const TIMELINE_PCT_DEFAULT = 55;
+const TIMELINE_PCT_DEFAULT = 65;
 const TIMELINE_PCT_STORAGE_KEY = 'subifi:timelinePct';
 
 // Main page. Two layouts share the same data:
@@ -223,6 +224,54 @@ export default function Page() {
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
 
+  // Global transport + delete shortcuts:
+  //   • Space          → toggle play/pause on the preview video
+  //   • Backspace/Del  → delete the currently selected subtitle / text
+  //                       overlay / image overlay
+  // We skip both shortcuts when the user is typing (input, textarea,
+  // contenteditable) so they don't hijack normal text editing.
+  useEffect(() => {
+    if (!videoUrl) return;
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditableTarget(e.target)) return;
+
+      if (e.code === 'Space' || e.key === ' ') {
+        const v = (window as unknown as { __previewVideo?: HTMLVideoElement })
+          .__previewVideo;
+        if (!v) return;
+        e.preventDefault();
+        if (v.paused) void v.play().catch(() => undefined);
+        else v.pause();
+        return;
+      }
+
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        const s = useEditor.getState();
+        if (s.selectedTextOverlayId) {
+          e.preventDefault();
+          s.removeTextOverlay(s.selectedTextOverlayId);
+        } else if (s.selectedOverlayId) {
+          e.preventDefault();
+          s.removeOverlay(s.selectedOverlayId);
+        } else if (s.selectedBlockId) {
+          e.preventDefault();
+          s.deleteBlock(s.selectedBlockId);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [videoUrl]);
+
   // Auto-dismiss the session-restored banner after a few seconds. It's
   // really only useful as a "hey, this isn't a fresh state" flash — once
   // the user looks away, leaving it up clutters the header.
@@ -308,7 +357,7 @@ export default function Page() {
               <span>
                 {status === 'extracting' && 'Extracting audio'}
                 {status === 'transcribing' && 'Transcribing'}
-                {status === 'burning' && 'Burning MP4'}
+                {status === 'burning' && 'Rendering video'}
               </span>
               <div className="h-1.5 w-36 overflow-hidden rounded-full bg-bg-hi">
                 <div
@@ -705,6 +754,11 @@ export default function Page() {
           already seen it (localStorage flag) or if the editor isn't ready
           yet. Mounted at the page root so it can spotlight any element. */}
       <OnboardingTour ready={tourReady} />
+
+      {/* Export modal. Mounted once at the page root — opened from the
+          header button. Burn pipeline lives inside; closing the modal
+          mid-export keeps the burn running in the background. */}
+      <ExportModal />
 
       {/* Undo/redo toast */}
       {undoRedoLabel && (

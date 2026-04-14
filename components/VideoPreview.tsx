@@ -532,15 +532,17 @@ export function VideoPreview() {
     <div
       ref={fsWrapperRef}
       data-tour="preview"
-      className={`flex h-full w-full items-center justify-center ${
+      className={`relative flex h-full w-full items-center justify-center ${
         isFullscreen ? 'bg-black' : ''
       }`}
     >
-      {/* Mobile-only sidebar — positioned to the left of the video box.
-          Rendered here (inside the centering flex) so it sits adjacent to
-          the aspect-ratio container without shifting the video. */}
-      <div className="mr-1 flex flex-col items-center justify-center md:hidden">
-        <MediaSidebar />
+      {/* Mobile-only sidebar — absolutely positioned so the video box is
+          the sole flex child and gets perfectly centered. The sidebar
+          overlays the left edge without pushing the video right. */}
+      <div className="pointer-events-none absolute inset-y-0 left-1 z-10 flex flex-col items-center justify-center md:hidden">
+        <div className="pointer-events-auto">
+          <MediaSidebar />
+        </div>
       </div>
       <div
         ref={containerRef}

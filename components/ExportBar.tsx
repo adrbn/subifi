@@ -1,16 +1,29 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { Button } from './ui/button';
 import { toJson, toSrt, toTxt, toVtt } from '@/lib/subtitle-formats';
 import { downloadBlob } from '@/lib/download';
-import { exportProject, parseProjectFile } from '@/lib/project-file';
+import {
+  exportProject,
+  parseProjectFile,
+  type ProjectFile,
+  type ProjectManifest,
+} from '@/lib/project-file';
+import { computeHeadHash } from '@/lib/video-hash';
+import { getVideo, putVideo } from '@/lib/video-cache';
+import { captureCoverFrame } from '@/lib/cover-frame';
+import { resetFFmpeg } from '@/lib/ffmpeg-client';
+import { extractAudio } from '@/lib/audio-extract';
+import { ProjectImportModal } from './ProjectImportModal';
 
 export function ExportBar() {
   const {
     blocks,
     videoFile,
+    videoHash,
+    videoDuration,
     style,
     segmentation,
     subtitleTracks,
@@ -21,21 +34,164 @@ export function ExportBar() {
     cuts,
     safeZone,
     customFonts,
+    setVideo,
+    setVideoHash,
+    setExtractedAudio,
+    setStatus,
+    setProgress,
     importProject,
   } = useEditor();
 
   const baseName = videoFile?.name.replace(/\.[^.]+$/, '') ?? 'subtitles';
   const disabled = blocks.length === 0;
   const projectInputRef = useRef<HTMLInputElement>(null);
+  // When a project import comes in without a matching cached video, we
+  // stash the parsed project here and pop a modal asking the user to
+  // drop the source video file.
+  const [pendingProject, setPendingProject] = useState<ProjectFile | null>(null);
+
+  // Load a File into the editor as if it had been dropped on the Dropzone:
+  // probe metadata, set it as the active video, kick off audio extraction,
+  // compute head-hash, and cache in IDB. Shared by both the "cache hit"
+  // and "user dropped the matching video" paths below.
+  const attachVideo = async (file: File, knownHash?: string) => {
+    setStatus('extracting', null);
+    setProgress(0);
+    const url = URL.createObjectURL(file);
+    const meta = await new Promise<{ w: number; h: number; d: number } | null>(
+      (resolve) => {
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.src = url;
+        v.onloadedmetadata = () =>
+          resolve({ w: v.videoWidth, h: v.videoHeight, d: v.duration });
+        v.onerror = () => resolve(null);
+      },
+    );
+    if (!meta) {
+      setStatus('error', 'Could not read video metadata');
+      return;
+    }
+    setVideo(file, url, meta.d, meta.w, meta.h);
+    try {
+      const hash = knownHash ?? (await computeHeadHash(file));
+      setVideoHash(hash);
+      // Only re-put when we don't already have it (skip the cache hit case).
+      if (!knownHash) await putVideo(hash, file, file.name);
+    } catch (e) {
+      console.warn('[import] hash/cache failed', e);
+    }
+    resetFFmpeg();
+    try {
+      const audio = await extractAudio(file, (r) => setProgress(r));
+      setExtractedAudio(audio);
+      setStatus('audio-ready', null);
+      setProgress(0);
+    } catch (e) {
+      console.error('[import] extractAudio failed', e);
+      setStatus('error', e instanceof Error ? e.message : 'Unknown error');
+    }
+  };
 
   const onImportProject = async (file: File) => {
+    let project: ProjectFile;
     try {
       const json = await file.text();
-      const project = parseProjectFile(json);
-      importProject(project);
+      project = parseProjectFile(json);
     } catch (err) {
       alert(`Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`);
+      return;
     }
+    // Apply edits/state immediately — the user sees their project come
+    // back even while we chase the video file.
+    importProject(project);
+    // Try to rehydrate the video from IDB by hash. On a hit, re-attach;
+    // on a miss, prompt the user for the source file.
+    const hash = project.manifest?.headHash ?? null;
+    if (hash) {
+      const cached = await getVideo(hash);
+      if (cached) {
+        const rehydrated = new File([cached.blob], cached.name, {
+          type: cached.type,
+        });
+        void attachVideo(rehydrated, hash);
+        return;
+      }
+    }
+    // Cache miss (or v1 file without manifest). Show the modal so the
+    // user can drop the matching source video — we'll soft-warn on
+    // hash mismatch but still accept the file.
+    setPendingProject(project);
+  };
+
+  const onPendingVideoPicked = async (file: File) => {
+    const project = pendingProject;
+    setPendingProject(null);
+    if (!project) return;
+    const expected = project.manifest?.headHash ?? null;
+    if (expected) {
+      try {
+        const actual = await computeHeadHash(file);
+        if (actual !== expected) {
+          // Soft-warn: the file doesn't match what the project was
+          // exported against. Timing/subtitle positions may look off,
+          // but the user still gets a working editor so they can fix up.
+          alert(
+            `Heads up: the video you picked does not match the one this project was exported from. ` +
+              `Subtitles and overlays are timed against the original source — some cues may not line up perfectly.`,
+          );
+        }
+        await attachVideo(file, actual);
+        return;
+      } catch {
+        // fall through to attach without a known hash
+      }
+    }
+    await attachVideo(file);
+  };
+
+  const onExportProject = async () => {
+    // Build the manifest. If the user dropped a video we have everything;
+    // otherwise `videoFile` is null and we export without a manifest so
+    // v1-style round-tripping still works.
+    let manifest: ProjectManifest = null;
+    if (videoFile) {
+      try {
+        const hash = videoHash ?? (await computeHeadHash(videoFile));
+        if (!videoHash) setVideoHash(hash);
+        const cover = await captureCoverFrame(videoFile);
+        manifest = {
+          name: videoFile.name,
+          size: videoFile.size,
+          type: videoFile.type || 'video/mp4',
+          duration: videoDuration,
+          headHash: hash,
+          coverDataUrl: cover,
+        };
+        // Make sure the cache has the current video, even if the user
+        // skipped the initial put (e.g. opened an older session).
+        await putVideo(hash, videoFile, videoFile.name).catch(() => {
+          /* non-fatal */
+        });
+      } catch (e) {
+        console.warn('[export] manifest build failed', e);
+      }
+    }
+    const json = exportProject({
+      style,
+      segmentation,
+      blocks,
+      subtitleTracks,
+      activeTrackId,
+      words,
+      textOverlays,
+      overlays,
+      cuts,
+      safeZone,
+      customFonts,
+      manifest,
+    });
+    downloadBlob(json, `${baseName}.subifi.json`, 'application/json');
   };
 
   return (
@@ -84,23 +240,23 @@ export function ExportBar() {
       >
         JSON
       </Button>
+      {/* Divider separates subtitle-format exports (SRT/VTT/TXT/JSON) from
+          project-level actions (full project save & reimport). */}
+      <span
+        className="mx-1 h-5 w-px shrink-0 bg-border"
+        aria-hidden="true"
+      />
       <Button
-        variant="secondary"
+        variant="ghost"
         size="sm"
         disabled={disabled}
         className="shrink-0"
-        onClick={() => {
-          const json = exportProject({
-            style, segmentation, blocks, subtitleTracks, activeTrackId,
-            words, textOverlays, overlays, cuts, safeZone, customFonts,
-          });
-          downloadBlob(json, `${baseName}.subifi.json`, 'application/json');
-        }}
+        onClick={() => void onExportProject()}
       >
         Project
       </Button>
       <Button
-        variant="secondary"
+        variant="ghost"
         size="sm"
         className="shrink-0"
         onClick={() => projectInputRef.current?.click()}
@@ -117,6 +273,11 @@ export function ExportBar() {
           if (file) void onImportProject(file);
           e.target.value = '';
         }}
+      />
+      <ProjectImportModal
+        project={pendingProject}
+        onPick={(f) => void onPendingVideoPicked(f)}
+        onClose={() => setPendingProject(null)}
       />
     </div>
   );

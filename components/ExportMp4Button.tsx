@@ -1,96 +1,61 @@
 'use client';
 
-import { useState } from 'react';
 import { useEditor } from '@/lib/store';
-import { burnSubtitles, cancelBurn, BurnCancelledError } from '@/lib/burn-in';
-import { downloadBlob } from '@/lib/download';
 
-// Primary CTA mounted in the top-right of the header. Kicks off the ffmpeg
-// burn pipeline with the current style + overlays and triggers a download
-// when done. Disabled until there are blocks to burn.
+// Header CTA. Two roles:
+//   1. Idle  → click opens the ExportModal where the user picks options
+//      and triggers the actual burn.
+//   2. Burning + modal closed → "Run in background" indicator. Pulses to
+//      show work is ongoing; click re-opens the modal with live progress.
+//
+// All burn logic lives in ExportModal — this component is purely the
+// header affordance.
 
 export function ExportMp4Button() {
   const {
     videoFile,
-    videoDuration,
-    videoWidth,
-    videoHeight,
-    style,
-    customFonts,
     overlays,
-    imageOverlaysVisible,
     textOverlays,
-    textOverlaysVisible,
-    cuts,
-    cutsVisible,
-    setStatus,
-    setProgress,
-    status,
-    visibleBlocks,
     blocks,
+    status,
+    progress,
+    exportModalOpen,
+    setExportModalOpen,
   } = useEditor();
-  const [burnProgress, setBurnProgress] = useState(0);
 
-  const baseName = videoFile?.name.replace(/\.[^.]+$/, '') ?? 'video';
   const hasAnyContent =
     blocks.length > 0 || overlays.length > 0 || textOverlays.length > 0;
-  const disabled = !videoFile || !hasAnyContent || status === 'burning';
+  const isBurning = status === 'burning';
+  const disabled = !videoFile || (!hasAnyContent && !isBurning);
 
-  const onClick = async () => {
-    if (!videoFile) return;
-    setStatus('burning', null);
-    setProgress(0);
-    setBurnProgress(0);
-    try {
-      const burnBlocks = visibleBlocks();
-      const burnOverlays = imageOverlaysVisible ? overlays : [];
-      const burnTextOverlays = textOverlaysVisible ? textOverlays : [];
-      const burnCuts = cutsVisible ? cuts : [];
-      const out = await burnSubtitles(
-        {
-          videoFile,
-          blocks: burnBlocks,
-          style,
-          videoWidth,
-          videoHeight,
-          customFonts,
-          overlays: burnOverlays,
-          textOverlays: burnTextOverlays,
-          cuts: burnCuts,
-          videoDuration,
-        },
-        (p) => {
-          setProgress(p);
-          setBurnProgress(p);
-        },
-      );
-      downloadBlob(out, `${baseName}-subbed.mp4`, 'video/mp4');
-      setStatus('ready', null);
-    } catch (e) {
-      // Cancellations are user-initiated — no error banner, just go back
-      // to "ready" so the button reverts and they can try again.
-      if (e instanceof BurnCancelledError) {
-        setStatus('ready', null);
-        setProgress(0);
-        setBurnProgress(0);
-        return;
-      }
-      setStatus('error', e instanceof Error ? e.message : 'Burn failed');
-    }
+  const onClick = () => {
+    setExportModalOpen(true);
   };
 
-  const isBurning = status === 'burning';
-
-  if (isBurning) {
+  // Burning AND modal closed → background-progress pill that pulses.
+  if (isBurning && !exportModalOpen) {
+    const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
     return (
       <button
         type="button"
-        onClick={() => cancelBurn()}
-        className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
-        title="Stop the in-progress export"
+        data-tour="export"
+        onClick={onClick}
+        // animate-pulse on the dot + a flowing gradient on the bg gives a
+        // clear "live work in the background" signal without being noisy.
+        className="group relative inline-flex items-center gap-2 overflow-hidden rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-500"
+        title="Export running — click to open progress"
       >
-        <span>■</span>
-        <span>Cancel · {Math.round(burnProgress * 100)}%</span>
+        <span
+          className="h-2 w-2 animate-pulse rounded-full bg-white"
+          aria-hidden
+        />
+        <span>Exporting · {pct}%</span>
+        {/* Flowing shimmer to reinforce "alive" state */}
+        <span
+          className="pointer-events-none absolute inset-y-0 -left-1/2 w-1/2 -skew-x-12 bg-gradient-to-r from-transparent via-white/25 to-transparent"
+          style={{ animation: 'subifi-export-shimmer 1.6s linear infinite' }}
+          aria-hidden
+        />
       </button>
     );
   }
@@ -99,13 +64,13 @@ export function ExportMp4Button() {
     <button
       type="button"
       data-tour="export"
-      onClick={() => void onClick()}
+      onClick={onClick}
       disabled={disabled}
       className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-900/60 disabled:text-emerald-300/50"
       title={
-        disabled && !hasAnyContent
+        disabled
           ? 'Add subtitles, text, or images first'
-          : 'Burn subtitles + overlays into an MP4'
+          : 'Open export options'
       }
     >
       <span>▶</span>

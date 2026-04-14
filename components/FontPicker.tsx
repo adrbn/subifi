@@ -2,6 +2,11 @@
 
 import { useEffect, useRef } from 'react';
 import { GOOGLE_FONTS, loadGoogleFont } from '@/lib/google-fonts';
+import {
+  CURATED_FONTS,
+  findCuratedFont,
+  loadCuratedFontFamily,
+} from '@/lib/curated-fonts';
 import { useEditor } from '@/lib/store';
 import { Select } from './ui/select';
 import { Button } from './ui/button';
@@ -74,9 +79,13 @@ export function FontPicker({ value, onChange, compact = false }: FontPickerProps
 
   // Preload the currently-selected Google Font so the preview shows it
   // immediately even before the user clicks anything in the preset list.
+  // Curated remote fonts (Marianne, etc.) load all their variants up-front
+  // so the weight/italic picker works instantly without a round-trip.
   useEffect(() => {
     if (GOOGLE_FONTS.includes(family)) {
       loadGoogleFont(family, weight);
+    } else if (findCuratedFont(family)) {
+      loadCuratedFontFamily(family);
     }
   }, [family, weight]);
 
@@ -108,6 +117,7 @@ export function FontPicker({ value, onChange, compact = false }: FontPickerProps
             const next = e.target.value;
             setFamily(next);
             if (GOOGLE_FONTS.includes(next)) loadGoogleFont(next, weight);
+            else if (findCuratedFont(next)) loadCuratedFontFamily(next);
           }}
         >
           {customFonts.length > 0 && (
@@ -115,6 +125,15 @@ export function FontPicker({ value, onChange, compact = false }: FontPickerProps
               {customFonts.map((f) => (
                 <option key={f.name} value={f.name}>
                   {f.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {CURATED_FONTS.length > 0 && (
+            <optgroup label="Curated">
+              {CURATED_FONTS.map((f) => (
+                <option key={f.family} value={f.family}>
+                  {f.displayName}
                 </option>
               ))}
             </optgroup>

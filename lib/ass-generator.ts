@@ -10,13 +10,30 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 // measureBlockText()) and passed via `blockMetrics`.
 
 // --- Export visual compensation ---
-// CSS text-shadow outlines (8-directional) create more visual weight than
-// libass vector outlines, making preview text appear ~5-8% larger. And at
-// small preview scale, the same proportional border-radius looks more
-// prominent to the eye. These factors nudge the export to match the
-// perceived preview look.
-const FONT_SIZE_BOOST = 1.06;   // 6% larger font to match CSS text-shadow weight
+// The preview (CSS + CoreText on macOS) renders text noticeably larger than
+// libass (FreeType). Two effects compound:
+//   1. Font engines differ: CoreText maps font-size → glyph outlines with
+//      different metric table interpretation than FreeType, producing ~15-20%
+//      more visual weight.
+//   2. CSS 8-directional text-shadow outlines add perceived size that libass
+//      vector strokes don't match (~10-15% extra).
+// Combined, preview text appears ~30-40% larger than export at the same
+// nominal font size. FONT_SIZE_BOOST compensates.
+const FONT_SIZE_BOOST = 1.7;    // matches CSS/CoreText rendering weight
 const RADIUS_BOOST = 1.4;       // 40% more radius to match small-scale perception
+// Background box scale is independent of font scale — libass renders the same
+// nominal font-size narrower than CSS measures it, so scaling the box by
+// FONT_SIZE_BOOST overshoots and produces visibly oversized boxes. 1.0 means
+// "trust the canvas-measured text width, just add the configured padding".
+const BOX_SCALE = 1.0;
+// Vertical correction applied to the rounded background box (NOT the text).
+// libass anchors centered text on the em-box midline, which sits BELOW the
+// visual ink midline in screen coordinates (ascenders extend higher than
+// descenders, so the optical center of caps is above the metric center).
+// Sliding the box up by a fraction of the boosted font size makes the box
+// wrap the visible ink instead of the metric envelope — without touching
+// any text \pos, so different-sized texts can't drift toward each other.
+const BOX_VERTICAL_NUDGE = 0.05;
 
 function hexToAssColor(hex: string, alpha = 1): string {
   const h = hex.replace('#', '').padEnd(6, '0');
@@ -364,9 +381,21 @@ export function generateAss({
 
   const events: string[] = [];
 
+  // One-frame gap (~40ms, safe for any common frame rate) prevents consecutive
+  // cues from visually overlapping in libass when source timings have slight
+  // overlap. The DOM preview doesn't show this because CSS paints only the
+  // last active block on top, but libass renders every active cue — including
+  // two rounded backgrounds stacked on the same line.
+  const OVERLAP_GUARD_SEC = 0.04;
+
   blocks.forEach((b, i) => {
+    const next = blocks[i + 1];
+    const clippedEnd =
+      next && b.end > next.start - OVERLAP_GUARD_SEC
+        ? Math.max(b.start + 0.01, next.start - OVERLAP_GUARD_SEC)
+        : b.end;
     const start = formatAssTimestamp(b.start);
-    const end = formatAssTimestamp(b.end);
+    const end = formatAssTimestamp(clippedEnd);
     const merged: Style = b.styleOverride
       ? { ...style, ...b.styleOverride }
       : style;
@@ -394,12 +423,14 @@ export function generateAss({
       const padY = merged.backgroundPaddingY;
       const radius = Math.round((merged.backgroundRadius ?? 0) * RADIUS_BOOST);
       const boostedFs = Math.round(merged.fontSize * FONT_SIZE_BOOST);
-      // Scale box to match the boosted font size so background fits text.
-      const fontRatio = FONT_SIZE_BOOST;
-      const boxW = metrics.width * fontRatio + padX * 2;
-      const boxH = metrics.height * fontRatio + padY * 2;
+      // Box is sized from the canvas-measured text dims (padded). We do NOT
+      // apply FONT_SIZE_BOOST here — see BOX_SCALE comment.
+      const boxW = metrics.width * BOX_SCALE + padX * 2;
+      const boxH = metrics.height * BOX_SCALE + padY * 2;
       const boxX = Math.round(posX - boxW / 2);
-      const boxY = Math.round(posY - boxH / 2);
+      // Slide the box up so it visually wraps the ink, not the metric box.
+      // Text \pos stays at posY — only the background moves.
+      const boxY = Math.round(posY - boxH / 2 - boostedFs * BOX_VERTICAL_NUDGE);
       const drawPath = roundedRectDraw(boxW, boxH, radius);
 
       // Background color in ASS BGR format.
@@ -457,11 +488,12 @@ export function generateAss({
       const padX = t.backgroundPaddingX;
       const padY = t.backgroundPaddingY;
       const radius = Math.round((t.backgroundRadius ?? 0) * RADIUS_BOOST);
-      const fontRatio = FONT_SIZE_BOOST;
-      const boxW = metrics.width * fontRatio + padX * 2;
-      const boxH = metrics.height * fontRatio + padY * 2;
+      const boostedFs = Math.round(t.fontSize * FONT_SIZE_BOOST);
+      const boxW = metrics.width * BOX_SCALE + padX * 2;
+      const boxH = metrics.height * BOX_SCALE + padY * 2;
       const boxX = Math.round(tx - boxW / 2);
-      const boxY = Math.round(ty - boxH / 2);
+      // Slide box up so it visually wraps the ink, not the metric box.
+      const boxY = Math.round(ty - boxH / 2 - boostedFs * BOX_VERTICAL_NUDGE);
       const drawPath = roundedRectDraw(boxW, boxH, radius);
 
       const bgHex = t.backgroundColor.replace('#', '').padEnd(6, '0');
@@ -471,7 +503,6 @@ export function generateAss({
       const bgAlpha = Math.round((1 - t.backgroundOpacity) * 255)
         .toString(16).padStart(2, '0').toUpperCase();
 
-      const boostedFs = Math.round(t.fontSize * FONT_SIZE_BOOST);
       const bgInline =
         `{\\pos(${boxX},${boxY})` +
         `\\1c&H${bgB}${bgG}${bgR}&` +

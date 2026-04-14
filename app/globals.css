@@ -65,3 +65,9 @@ input[type="color"] {
 }
 input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 input[type="color"]::-webkit-color-swatch { border: 2px solid #3a3a50; border-radius: 6px; }
+
+/* Shimmer used by the header export pill while a burn runs in the background. */
+@keyframes subifi-export-shimmer {
+  0%   { transform: translateX(0%)    skewX(-12deg); }
+  100% { transform: translateX(400%)  skewX(-12deg); }
+}

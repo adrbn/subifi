@@ -4,7 +4,10 @@ import { useCallback, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useEditor } from '@/lib/store';
 import { extractAudio } from '@/lib/audio-extract';
+import { resetFFmpeg } from '@/lib/ffmpeg-client';
 import { fromSrt, fromVtt } from '@/lib/subtitle-formats';
+import { computeHeadHash } from '@/lib/video-hash';
+import { putVideo } from '@/lib/video-cache';
 
 // The Dropzone handles three kinds of drops:
 //   1. A video file — probe metadata, extract audio, then stop. The user
@@ -35,6 +38,7 @@ export function Dropzone() {
 
   const {
     setVideo,
+    setVideoHash,
     setExtractedAudio,
     setBlocks,
     setStatus,
@@ -91,6 +95,25 @@ export function Dropzone() {
 
       setVideo(file, url, meta.d, meta.w, meta.h);
 
+      // Fire-and-forget: hash the file head and cache it in IndexedDB so a
+      // later project import can re-attach this video automatically. Both
+      // steps tolerate failure — they're opportunistic UX, not critical.
+      void (async () => {
+        try {
+          const hash = await computeHeadHash(file);
+          setVideoHash(hash);
+          await putVideo(hash, file, file.name);
+        } catch (e) {
+          console.warn('[dropzone] head-hash/cache failed', e);
+        }
+      })();
+
+      // Start the new video's audio extraction from a clean ffmpeg instance.
+      // The shared wasm filesystem otherwise carries leftover state from
+      // previous burns/extractions and trips "ErrnoError: FS error" on the
+      // next writeFile.
+      resetFFmpeg();
+
       try {
         const audio = await extractAudio(file, (r) => setProgress(r));
         setExtractedAudio(audio);
@@ -102,7 +125,7 @@ export function Dropzone() {
         setStatus('error', e instanceof Error ? e.message : 'Unknown error');
       }
     },
-    [setVideo, setExtractedAudio, setBlocks, setStatus, setProgress],
+    [setVideo, setVideoHash, setExtractedAudio, setBlocks, setStatus, setProgress],
   );
 
   const onDrop = useCallback(

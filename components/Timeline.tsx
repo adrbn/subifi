@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { computeWaveformPeaks, WAVEFORM_BUCKETS } from '@/lib/waveform';
 
@@ -132,10 +132,17 @@ export function Timeline() {
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 32;
   // Vertical lane height — adjustable via pinch on the labels sidebar.
+  // This is the baseline height for a POPULATED lane; empty lanes collapse
+  // to `COMPACT_LANE_H` so the timeline fills the screen vertically with
+  // the content the user actually has, not with empty placeholder rows.
   const [laneH, setLaneH] = useState(50);
   const LANE_H_MIN = 24;
   const LANE_H_MAX = 100;
+  const COMPACT_LANE_H = 18;
   const labelsRef = useRef<HTMLDivElement>(null);
+  // Track the scroll area's height so we can grow populated lanes to fill
+  // the available vertical space when there's room to spare.
+  const [containerH, setContainerH] = useState(0);
 
   // Decode the extracted audio once whenever it changes. The decode is
   // async + cancellable so a fast-clicking user doesn't apply stale peaks
@@ -240,7 +247,19 @@ export function Timeline() {
       const rect = trackEl.getBoundingClientRect();
       const cursorPx = e.clientX - rect.left;
       const pct = rect.width > 0 ? cursorPx / rect.width : 0;
-      const factor = e.deltaY > 0 ? 0.85 : 1.18;
+      // Touchpad detection heuristic: trackpads emit pixel-mode (deltaMode
+      // === 0) deltas with small magnitude (<50), often fractional. Mouse
+      // wheels emit large stepped deltas (commonly 100 / 120 per notch).
+      // For shift+wheel on a touchpad the natural-scroll mapping feels
+      // inverted to most users (push two fingers up → expect zoom in),
+      // so we flip the direction in that case only.
+      const isTouchpad =
+        e.deltaMode === 0 &&
+        Math.abs(e.deltaY) < 50 &&
+        Math.abs(e.deltaY) > 0;
+      const invertForTouchpad = e.shiftKey && !e.ctrlKey && isTouchpad;
+      const zoomingIn = invertForTouchpad ? e.deltaY > 0 : e.deltaY < 0;
+      const factor = zoomingIn ? 1.18 : 0.85;
       setZoom((z) => {
         const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z * factor));
         const newTrackWidth = (rect.width * next) / z;
@@ -364,6 +383,64 @@ export function Timeline() {
   const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, z * 2));
   const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, z / 2));
   const zoomReset = () => setZoom(1);
+
+  // Observe the scroll area size so we can redistribute lane height when
+  // the mobile viewport shrinks/grows (rotation, keyboard, layout shifts).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerH(entry.contentRect.height);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Per-lane heights: empty lanes collapse to COMPACT_LANE_H, populated
+  // lanes share the remaining space equally but never shrink below laneH.
+  // Order: sub tracks (N), then text-overlays lane, then image-overlays
+  // lane, then cuts lane.
+  const laneEmptyFlags = useMemo(() => {
+    const flags: boolean[] = subtitleTracks.map((t) => t.blocks.length === 0);
+    flags.push(textOverlays.length === 0);
+    flags.push(overlays.length === 0);
+    flags.push(cuts.length === 0);
+    return flags;
+  }, [subtitleTracks, textOverlays, overlays, cuts]);
+
+  const laneHeights = useMemo(() => {
+    const emptyCount = laneEmptyFlags.filter(Boolean).length;
+    const populatedCount = laneEmptyFlags.length - emptyCount;
+    const baseUsed = emptyCount * COMPACT_LANE_H;
+    const remaining = containerH - baseUsed;
+    const perPopulated =
+      populatedCount > 0
+        ? Math.max(laneH, remaining / populatedCount)
+        : laneH;
+    return laneEmptyFlags.map((empty) => (empty ? COMPACT_LANE_H : perPopulated));
+  }, [laneEmptyFlags, containerH, laneH]);
+
+  const laneTops = useMemo(() => {
+    const tops: number[] = [];
+    let acc = 0;
+    for (const h of laneHeights) {
+      tops.push(acc);
+      acc += h;
+    }
+    return tops;
+  }, [laneHeights]);
+
+  const totalLaneH = useMemo(
+    () => laneHeights.reduce((a, b) => a + b, 0),
+    [laneHeights],
+  );
+
+  // Convenience indices for the fixed lanes after the variable sub tracks.
+  const textLaneIdx = subtitleTracks.length;
+  const imageLaneIdx = subtitleTracks.length + 1;
+  const cutLaneIdx = subtitleTracks.length + 2;
 
   // While a layer drag is active, prevent the scroll container from
   // interpreting touch moves as horizontal scrolling. Without this, dragging
@@ -615,7 +692,7 @@ export function Timeline() {
             className={`flex items-center gap-0.5 px-1 cursor-pointer border-b border-border/40 ${
               track.id === activeTrackId ? 'bg-accent/10' : ''
             }`}
-            style={{ height: laneH }}
+            style={{ height: laneHeights[idx] }}
             onClick={() => {
               setActiveTrack(track.id);
               // Deselect individual block + text overlay so the StylePanel
@@ -637,7 +714,7 @@ export function Timeline() {
             </span>
           </div>
         ))}
-        <div className="flex items-center gap-0.5 px-1 border-b border-border/40" style={{ height: laneH }}>
+        <div className="flex items-center gap-0.5 px-1 border-b border-border/40" style={{ height: laneHeights[textLaneIdx] }}>
           <button
             type="button"
             onClick={toggleTextOverlaysVisible}
@@ -648,7 +725,7 @@ export function Timeline() {
           </button>
           <span className="truncate text-text-muted">Textes</span>
         </div>
-        <div className="flex items-center gap-0.5 px-1 border-b border-border/40" style={{ height: laneH }}>
+        <div className="flex items-center gap-0.5 px-1 border-b border-border/40" style={{ height: laneHeights[imageLaneIdx] }}>
           <button
             type="button"
             onClick={toggleImageOverlaysVisible}
@@ -659,7 +736,7 @@ export function Timeline() {
           </button>
           <span className="truncate text-text-muted">Images</span>
         </div>
-        <div className="flex items-center gap-0.5 px-1" style={{ height: laneH }}>
+        <div className="flex items-center gap-0.5 px-1" style={{ height: laneHeights[cutLaneIdx] }}>
           <button
             type="button"
             onClick={toggleCutsVisible}
@@ -681,7 +758,7 @@ export function Timeline() {
         style={{
           width: `${zoom * 100}%`,
           minWidth: '100%',
-          minHeight: `${(subtitleTracks.length + 3) * laneH}px`,
+          minHeight: `${totalLaneH}px`,
           height: '100%',
           // Prevent vertical page scroll when touching the timeline. pan-x
           // allows horizontal scroll (for timeline panning) but blocks the
@@ -735,7 +812,8 @@ export function Timeline() {
             );
             const isActive = track.id === activeTrackId;
             const isSelected = isActive && selectedBlockId === b.id;
-            const topPx = trackIdx * laneH + 3;
+            const topPx = laneTops[trackIdx] + 3;
+            const blockH = Math.max(4, laneHeights[trackIdx] - 6);
             return (
               <div
                 key={`${track.id}-${b.id}`}
@@ -748,7 +826,7 @@ export function Timeline() {
                       ? 'bg-accent/70 hover:bg-accent'
                       : 'bg-purple-500/60 hover:bg-purple-500'
                 }`}
-                style={{ left: `${left}%`, width: `${width}%`, top: `${topPx}px`, height: `${laneH - 6}px`, touchAction: 'none' }}
+                style={{ left: `${left}%`, width: `${width}%`, top: `${topPx}px`, height: `${blockH}px`, touchAction: 'none' }}
                 title={b.text}
                 onPointerDown={isActive ? onDragStart({
                   type: 'block',
@@ -818,7 +896,8 @@ export function Timeline() {
             ((ov.end - ov.start) / videoDuration) * 100,
           );
           const isSelected = selectedTextOverlayId === ov.id;
-          const textLaneTop = subtitleTracks.length * laneH + 3;
+          const textLaneTop = laneTops[textLaneIdx] + 3;
+          const textBlockH = Math.max(4, laneHeights[textLaneIdx] - 6);
           return (
             <div
               key={ov.id}
@@ -829,7 +908,7 @@ export function Timeline() {
                   ? 'bg-sky-400/80 ring-1 ring-sky-200'
                   : 'bg-sky-500/60 hover:bg-sky-500'
               }`}
-              style={{ left: `${left}%`, width: `${width}%`, top: `${textLaneTop}px`, height: `${laneH - 6}px`, touchAction: 'none' }}
+              style={{ left: `${left}%`, width: `${width}%`, top: `${textLaneTop}px`, height: `${textBlockH}px`, touchAction: 'none' }}
               title={ov.text}
               onPointerDown={onDragStart({
                 type: 'text',
@@ -882,7 +961,8 @@ export function Timeline() {
             ((ov.end - ov.start) / videoDuration) * 100,
           );
           const isSelected = selectedOverlayId === ov.id;
-          const imgLaneTop = (subtitleTracks.length + 1) * laneH + 3;
+          const imgLaneTop = laneTops[imageLaneIdx] + 3;
+          const imgBlockH = Math.max(4, laneHeights[imageLaneIdx] - 6);
           return (
             <div
               key={ov.id}
@@ -893,7 +973,7 @@ export function Timeline() {
                   ? 'bg-emerald-400/80 ring-1 ring-emerald-200'
                   : 'bg-emerald-500/60 hover:bg-emerald-500'
               }`}
-              style={{ left: `${left}%`, width: `${width}%`, top: `${imgLaneTop}px`, height: `${laneH - 6}px`, touchAction: 'none' }}
+              style={{ left: `${left}%`, width: `${width}%`, top: `${imgLaneTop}px`, height: `${imgBlockH}px`, touchAction: 'none' }}
               title={`Image overlay · ${(ov.end - ov.start).toFixed(2)}s`}
               onPointerDown={onDragStart({
                 type: 'image',

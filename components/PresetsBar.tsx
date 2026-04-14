@@ -12,16 +12,42 @@ import {
 import { exportStyles, parseStyleFile } from '@/lib/style-file';
 import { downloadBlob } from '@/lib/download';
 import { Button } from './ui/button';
+import {
+  listSharedPresets,
+  publishSharedPreset,
+  type SharedPreset,
+} from '@/lib/shared-presets-client';
 
 export function PresetsBar() {
   const { style, applyStylePreset, resegment } = useEditor();
   const [userPresets, setUserPresets] = useState<UserStylePreset[]>([]);
+  const [sharedPresets, setSharedPresets] = useState<SharedPreset[]>([]);
 
   // Hydrate from localStorage on mount. We don't read in the initial state
   // because that would run during SSR and crash the build.
   useEffect(() => {
     setUserPresets(loadUserPresets());
   }, []);
+
+  // Best-effort fetch of the community preset library. Fails silently — the
+  // bar just won't show a Shared section, which is fine.
+  useEffect(() => {
+    void (async () => {
+      const list = await listSharedPresets();
+      setSharedPresets(list);
+    })();
+  }, []);
+
+  const onPublishPreset = async (p: UserStylePreset) => {
+    if (!window.confirm(`Publish "${p.label}" to the shared library?`)) return;
+    const published = await publishSharedPreset(p.label, p.style);
+    if (!published) {
+      alert('Publish failed. Please try again later.');
+      return;
+    }
+    // Optimistic-ish: prepend so the user sees their contribution right away.
+    setSharedPresets((prev) => [published, ...prev]);
+  };
 
   const styleInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,8 +99,9 @@ export function PresetsBar() {
             {p.label}
           </Button>
         ))}
-        {/* User-saved presets. The little × removes them — guarded so a
-            click on it doesn't also fire the apply handler. */}
+        {/* User-saved presets. × removes, ↑ publishes to the shared
+            library. Both are guarded so a click on them doesn't also fire
+            the apply handler. */}
         {userPresets.map((p) => (
           <div
             key={p.id}
@@ -92,6 +119,14 @@ export function PresetsBar() {
             </button>
             <button
               type="button"
+              onClick={() => void onPublishPreset(p)}
+              className="border-l border-border bg-bg-elev px-1.5 text-xs text-text-muted hover:bg-accent/30 hover:text-text"
+              title="Publish this preset to the shared library"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
               onClick={() => onDeletePreset(p.id)}
               className="border-l border-border bg-bg-elev px-1.5 text-xs text-text-muted hover:bg-red-900/40 hover:text-red-200"
               title="Delete this preset"
@@ -100,6 +135,32 @@ export function PresetsBar() {
             </button>
           </div>
         ))}
+        {/* Shared library presets — read-only chips. Applying one copies
+            its style into the current editor state (same path as a built-in). */}
+        {sharedPresets.length > 0 && (
+          <span
+            className="mx-1 h-5 w-px shrink-0 bg-border/60"
+            aria-hidden="true"
+          />
+        )}
+        {sharedPresets.map((p) => (
+          <Button
+            key={p.id}
+            variant="secondary"
+            size="sm"
+            className="shrink-0 italic"
+            onClick={() => applyStylePreset({ ...DEFAULT_STYLE, ...p.style })}
+            title={`Shared preset · ${p.label}`}
+          >
+            {p.label}
+          </Button>
+        ))}
+        {/* Divider separates preset chips (apply) from preset management
+            actions (save / export / import) — they're conceptually different. */}
+        <span
+          className="mx-1 h-5 w-px shrink-0 bg-border"
+          aria-hidden="true"
+        />
         <Button
           variant="ghost"
           size="sm"

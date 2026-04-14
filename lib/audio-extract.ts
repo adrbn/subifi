@@ -1,5 +1,5 @@
 import { fetchFile } from '@ffmpeg/util';
-import { getFFmpeg } from './ffmpeg-client';
+import { getFFmpeg, resetFFmpeg } from './ffmpeg-client';
 
 // Extracts the audio track from a video as Opus mono @ 64 kbps in an .ogg
 // container. This keeps payloads well under Groq's 25 MB limit even for
@@ -7,7 +7,7 @@ import { getFFmpeg } from './ffmpeg-client';
 
 export type ExtractProgress = (ratio: number) => void;
 
-export async function extractAudio(
+async function extractOnce(
   videoFile: File,
   onProgress?: ExtractProgress,
 ): Promise<Uint8Array> {
@@ -18,6 +18,12 @@ export async function extractAudio(
 
   const inputName = 'input';
   const outputName = 'audio.ogg';
+
+  // Pre-clean any leftover files from a previous (possibly failed) run —
+  // the wasm FS is shared across operations and writeFile will fail with
+  // "FS error" if a stale file exists.
+  try { await ff.deleteFile(inputName); } catch { /* ignore */ }
+  try { await ff.deleteFile(outputName); } catch { /* ignore */ }
 
   await ff.writeFile(inputName, await fetchFile(videoFile));
 
@@ -45,4 +51,24 @@ export async function extractAudio(
     // ignore
   }
   return data as Uint8Array;
+}
+
+export async function extractAudio(
+  videoFile: File,
+  onProgress?: ExtractProgress,
+): Promise<Uint8Array> {
+  try {
+    return await extractOnce(videoFile, onProgress);
+  } catch (e) {
+    // Common case: a previous burn (especially MT-core crashes) left the
+    // wasm filesystem in a bad state. Reset and retry once with a fresh
+    // ffmpeg instance.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/FS error|ErrnoError/i.test(msg)) {
+      console.warn('[audio-extract] FS error — resetting ffmpeg and retrying', e);
+      resetFFmpeg();
+      return await extractOnce(videoFile, onProgress);
+    }
+    throw e;
+  }
 }

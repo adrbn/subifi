@@ -145,6 +145,16 @@ export async function getFFmpeg(
 }
 
 export function resetFFmpeg(): void {
+  // Terminate the previous instance to free wasm memory + worker — without
+  // this, a stale instance keeps its virtual filesystem alive and subsequent
+  // operations on a "fresh" instance can still hit FS errors from cross-talk.
+  if (ffmpegInstance) {
+    try {
+      ffmpegInstance.terminate();
+    } catch {
+      // ignore — instance may already be terminated
+    }
+  }
   ffmpegInstance = null;
   loadPromise = null;
   currentMode = null;

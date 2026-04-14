@@ -54,6 +54,10 @@ export type EditorState = {
   videoDuration: number;
   videoWidth: number;
   videoHeight: number;
+  // Head-hash of the current video (lib/video-hash.ts). Computed lazily
+  // after load so the UI stays responsive, then folded into project
+  // exports so re-imports can auto-match against the IDB video cache.
+  videoHash: string | null;
 
   // Audio extracted from the video, kept in memory so the user can trigger
   // transcription explicitly after dropping the video.
@@ -105,6 +109,11 @@ export type EditorState = {
 
   // Ephemeral label shown after undo/redo — auto-clears after a few seconds.
   undoRedoLabel: string | null;
+
+  // Whether the Export modal is currently open. The modal can be hidden
+  // mid-export ("continue in background") and re-opened later from the
+  // header button — the burn keeps running regardless of the modal state.
+  exportModalOpen: boolean;
 };
 
 const HISTORY_LIMIT = 50;
@@ -213,6 +222,7 @@ export type EditorActions = {
     width: number,
     height: number,
   ) => void;
+  setVideoHash: (hash: string | null) => void;
   clearVideo: () => void;
   setExtractedAudio: (audio: Uint8Array | null) => void;
   setBlocks: (blocks: SubtitleBlock[]) => void;
@@ -268,6 +278,7 @@ export type EditorActions = {
   visibleBlocks: () => SubtitleBlock[];
   setStatus: (status: Status, error?: string | null) => void;
   setProgress: (progress: number) => void;
+  setExportModalOpen: (open: boolean) => void;
   setCurrentTime: (t: number) => void;
   // Undo / redo. Both no-op when their stack is empty.
   undo: () => void;
@@ -287,6 +298,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
   videoDuration: 0,
   videoWidth: 1920,
   videoHeight: 1080,
+  videoHash: null,
 
   extractedAudio: null,
 
@@ -322,6 +334,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
   future: [],
   lastHistoryAt: 0,
   undoRedoLabel: null,
+  exportModalOpen: false,
 
   setVideo: (file, url, duration, width, height) =>
     set({
@@ -330,6 +343,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       videoDuration: duration,
       videoWidth: width,
       videoHeight: height,
+      videoHash: null,
       extractedAudio: null,
       words: [],
       blocks: [],
@@ -350,6 +364,8 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       lastHistoryAt: 0,
     }),
 
+  setVideoHash: (hash) => set({ videoHash: hash }),
+
   clearVideo: () => {
     const s = get();
     if (s.videoUrl) URL.revokeObjectURL(s.videoUrl);
@@ -357,6 +373,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
       videoFile: null,
       videoUrl: null,
       videoDuration: 0,
+      videoHash: null,
       extractedAudio: null,
       words: [],
       blocks: [],
@@ -850,6 +867,7 @@ export const useEditor = create<EditorState & EditorActions>()((set, get) => ({
 
   setStatus: (status, error = null) => set({ status, error }),
   setProgress: (progress) => set({ progress }),
+  setExportModalOpen: (open) => set({ exportModalOpen: open }),
   setCurrentTime: (t) => set({ currentTime: t }),
 
   undo: () => {

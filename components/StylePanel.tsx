@@ -8,6 +8,7 @@ import { Slider } from './ui/slider';
 import { Select } from './ui/select';
 import { Button } from './ui/button';
 import { GOOGLE_FONTS, loadGoogleFont } from '@/lib/google-fonts';
+import { findCuratedFont } from '@/lib/curated-fonts';
 
 // Right-side panel: all style knobs. Three editing modes:
 //
@@ -275,23 +276,61 @@ export function StylePanel() {
         onChange={(v) => set({ fontSize: v })}
       />
 
-      <Slider
-        label="Font weight"
-        min={100}
-        max={900}
-        step={100}
-        value={val.fontWeight}
-        onChange={(v) => set({ fontWeight: v })}
-      />
-
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-text-muted">Italic</span>
-        <input
-          type="checkbox"
-          checked={val.italic}
-          onChange={(e) => set({ italic: e.target.checked })}
-        />
-      </div>
+      {(() => {
+        // If the active family is a curated font with discrete variants
+        // (e.g. Marianne), render a single "Variant" dropdown that sets
+        // weight + italic together — it's the font's vocabulary, not an
+        // arbitrary numeric slider. Otherwise fall back to slider + checkbox.
+        const curated = findCuratedFont(val.fontFamily);
+        if (!curated) {
+          return (
+            <>
+              <Slider
+                label="Font weight"
+                min={100}
+                max={900}
+                step={100}
+                value={val.fontWeight}
+                onChange={(v) => set({ fontWeight: v })}
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-text-muted">Italic</span>
+                <input
+                  type="checkbox"
+                  checked={val.italic}
+                  onChange={(e) => set({ italic: e.target.checked })}
+                />
+              </div>
+            </>
+          );
+        }
+        const key = `${val.fontWeight}-${val.italic ? 'i' : 'n'}`;
+        return (
+          <div className="flex items-center justify-between gap-2">
+            <span className="shrink-0 text-xs text-text-muted">Variant</span>
+            <Select
+              className="flex-1"
+              value={key}
+              onChange={(e) => {
+                const [wStr, iFlag] = e.target.value.split('-');
+                set({
+                  fontWeight: Number(wStr),
+                  italic: iFlag === 'i',
+                });
+              }}
+            >
+              {curated.variants.map((v) => (
+                <option
+                  key={`${v.weight}-${v.italic ? 'i' : 'n'}`}
+                  value={`${v.weight}-${v.italic ? 'i' : 'n'}`}
+                >
+                  {v.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        );
+      })()}
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-text-muted">Text align</span>

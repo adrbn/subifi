@@ -117,6 +117,135 @@ export function fromVtt(content: string): SubtitleBlock[] {
   return parseCues(content, true);
 }
 
+// Diagnostic-returning variant. Used by the import UI so a failed parse can
+// explain *why* the file was rejected and suggest fixes. The parser itself
+// is intentionally lenient — these counters are descriptive, not prescriptive.
+export type SubtitleDiagnostic = {
+  ok: boolean;
+  blocks: SubtitleBlock[];
+  totalSections: number;
+  validCues: number;
+  sectionsMissingTimingLine: number;
+  sectionsWithBadTiming: number;
+  sectionsWithoutText: number;
+  // First problematic section (truncated) — useful to show the user which
+  // part of their file we couldn't make sense of.
+  firstBadSnippet: string | null;
+  // Likely root cause inferred from the counters; null when ok or unknown.
+  likelyCause:
+    | null
+    | 'no-timing-marker'
+    | 'unrecognized-time-format'
+    | 'empty-file'
+    | 'looks-like-something-else';
+};
+
+function parseCuesWithDiagnostics(
+  content: string,
+  skipHeader: boolean,
+): SubtitleDiagnostic {
+  const normalized = content.replace(/\r\n?/g, '\n').trim();
+  if (!normalized) {
+    return {
+      ok: false,
+      blocks: [],
+      totalSections: 0,
+      validCues: 0,
+      sectionsMissingTimingLine: 0,
+      sectionsWithBadTiming: 0,
+      sectionsWithoutText: 0,
+      firstBadSnippet: null,
+      likelyCause: 'empty-file',
+    };
+  }
+  const sections = normalized.split(/\n\s*\n/);
+  const start0 = skipHeader ? 1 : 0;
+  const blocks: SubtitleBlock[] = [];
+  let sectionsMissingTimingLine = 0;
+  let sectionsWithBadTiming = 0;
+  let sectionsWithoutText = 0;
+  let firstBadSnippet: string | null = null;
+  const recordBad = (snippet: string) => {
+    if (firstBadSnippet) return;
+    firstBadSnippet = snippet.length > 240 ? snippet.slice(0, 240) + '…' : snippet;
+  };
+  for (let i = start0; i < sections.length; i++) {
+    const raw = sections[i];
+    const lines = raw.split('\n').filter((l) => l.trim() !== '');
+    if (lines.length === 0) continue;
+    const timingIdx = lines.findIndex((l) => l.includes('-->'));
+    if (timingIdx === -1) {
+      sectionsMissingTimingLine++;
+      recordBad(raw);
+      continue;
+    }
+    const timing = lines[timingIdx];
+    const match = timing.match(/(\S+)\s*-->\s*(\S+)/);
+    if (!match) {
+      sectionsWithBadTiming++;
+      recordBad(raw);
+      continue;
+    }
+    const start = parseTimestamp(match[1]);
+    const end = parseTimestamp(match[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      sectionsWithBadTiming++;
+      recordBad(raw);
+      continue;
+    }
+    const textLines = lines.slice(timingIdx + 1);
+    const text = textLines.join('\n');
+    if (!text) {
+      sectionsWithoutText++;
+      recordBad(raw);
+      continue;
+    }
+    blocks.push({
+      id: newId(),
+      start,
+      end,
+      text,
+      words: synthesizeWords(text.replace(/\n/g, ' '), start, end),
+    });
+  }
+
+  const totalSections = sections.length - start0;
+  const ok = blocks.length > 0;
+
+  let likelyCause: SubtitleDiagnostic['likelyCause'] = null;
+  if (!ok) {
+    if (sectionsMissingTimingLine > 0 && sectionsWithBadTiming === 0) {
+      // Most sections existed but none had `-->`. Either the user supplied
+      // plain text, or the file uses a non-standard separator.
+      likelyCause = 'no-timing-marker';
+    } else if (sectionsWithBadTiming > 0) {
+      likelyCause = 'unrecognized-time-format';
+    } else {
+      likelyCause = 'looks-like-something-else';
+    }
+  }
+
+  return {
+    ok,
+    blocks,
+    totalSections,
+    validCues: blocks.length,
+    sectionsMissingTimingLine,
+    sectionsWithBadTiming,
+    sectionsWithoutText,
+    firstBadSnippet,
+    likelyCause,
+  };
+}
+
+export function fromSrtWithDiagnostics(content: string): SubtitleDiagnostic {
+  return parseCuesWithDiagnostics(content, false);
+}
+
+export function fromVttWithDiagnostics(content: string): SubtitleDiagnostic {
+  return parseCuesWithDiagnostics(content, true);
+}
+
 export function toTxt(blocks: SubtitleBlock[]): string {
   return blocks.map((b) => b.text.replace(/\n/g, ' ')).join('\n\n');
 }
