@@ -34,3 +34,14 @@ export async function publishSharedPreset(
     return null;
   }
 }
+
+export async function deleteSharedPreset(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/presets?id=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

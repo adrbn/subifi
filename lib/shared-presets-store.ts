@@ -21,6 +21,7 @@ export type SharedPreset = {
 export interface SharedPresetStore {
   list(): Promise<SharedPreset[]>;
   add(preset: SharedPreset): Promise<void>;
+  remove(id: string): Promise<boolean>;
 }
 
 class MemoryStore implements SharedPresetStore {
@@ -33,6 +34,12 @@ class MemoryStore implements SharedPresetStore {
 
   async add(preset: SharedPreset): Promise<void> {
     this.data.push(preset);
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const before = this.data.length;
+    this.data = this.data.filter((p) => p.id !== id);
+    return this.data.length < before;
   }
 }
 

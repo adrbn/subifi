@@ -13,6 +13,7 @@ import { exportStyles, parseStyleFile } from '@/lib/style-file';
 import { downloadBlob } from '@/lib/download';
 import { Button } from './ui/button';
 import {
+  deleteSharedPreset,
   listSharedPresets,
   publishSharedPreset,
   type SharedPreset,
@@ -69,6 +70,19 @@ export function PresetsBar() {
     }
     // Optimistic-ish: prepend so the user sees their contribution right away.
     setSharedPresets((prev) => [published, ...prev]);
+  };
+
+  // Deletion is public (no auth) — matches the rest of the shared-library
+  // design. Confirm to prevent accidental click-throughs, then optimistically
+  // remove from the visible list.
+  const onDeleteSharedPreset = async (p: SharedPreset) => {
+    if (!window.confirm(`Remove "${p.label}" from the shared library?`)) return;
+    const ok = await deleteSharedPreset(p.id);
+    if (!ok) {
+      alert('Delete failed. Please try again later.');
+      return;
+    }
+    setSharedPresets((prev) => prev.filter((x) => x.id !== p.id));
   };
 
   const styleInputRef = useRef<HTMLInputElement>(null);
@@ -166,16 +180,27 @@ export function PresetsBar() {
           />
         )}
         {sharedPresets.map((p) => (
-          <Button
+          <div
             key={p.id}
-            variant="secondary"
-            size="sm"
-            className="shrink-0 italic"
-            onClick={() => applyPresetWithFont(p.style)}
-            title={`Shared preset · ${p.label}`}
+            className="group flex shrink-0 items-stretch overflow-hidden rounded-md border border-border"
           >
-            {p.label}
-          </Button>
+            <button
+              type="button"
+              onClick={() => applyPresetWithFont(p.style)}
+              className="bg-bg-elev px-2 py-1 text-xs italic text-text hover:bg-bg-hi"
+              title={`Shared preset · ${p.label}`}
+            >
+              {p.label}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDeleteSharedPreset(p)}
+              className="border-l border-border bg-bg-elev px-1.5 text-xs text-text-muted hover:bg-red-900/40 hover:text-red-200"
+              title="Remove this preset from the shared library (no auth — visible to everyone)"
+            >
+              ×
+            </button>
+          </div>
         ))}
         {/* Divider separates preset chips (apply) from preset management
             actions (save / export / import) — they're conceptually different. */}

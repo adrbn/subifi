@@ -11,9 +11,12 @@ import type { Style } from '@/lib/types';
 // label length + style size on the server so payloads stay small.
 //
 // Shape the client speaks:
-//   GET  /api/presets          -> { presets: SharedPreset[] }
-//   POST /api/presets          -> { preset: SharedPreset }
+//   GET    /api/presets          -> { presets: SharedPreset[] }
+//   POST   /api/presets          -> { preset: SharedPreset }
 //     body: { label: string, style: Style }
+//   DELETE /api/presets?id=XXX   -> { ok: true }
+//     No auth — matches the public-by-design stance of the rest of this
+//     endpoint. Rate-limited like POST to deter mass purges.
 
 export const runtime = 'nodejs';
 export const maxDuration = 10;
@@ -91,4 +94,30 @@ export async function POST(req: Request) {
   const store = getSharedPresetStore();
   await store.add(preset);
   return NextResponse.json({ preset });
+}
+
+export async function DELETE(req: Request) {
+  const key = clientKeyFromRequest(req);
+  const limit = checkRateLimit(key);
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: 'Rate limit exceeded. Slow down.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(Math.ceil(limit.retryAfterMs / 1000)) },
+      },
+    );
+  }
+
+  const id = new URL(req.url).searchParams.get('id');
+  if (!id) {
+    return NextResponse.json({ error: 'id required' }, { status: 400 });
+  }
+
+  const store = getSharedPresetStore();
+  const removed = await store.remove(id);
+  if (!removed) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true });
 }
