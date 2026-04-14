@@ -17,6 +17,9 @@ import {
   publishSharedPreset,
   type SharedPreset,
 } from '@/lib/shared-presets-client';
+import { GOOGLE_FONTS, loadGoogleFont } from '@/lib/google-fonts';
+import { findCuratedFont, loadCuratedFontFamily } from '@/lib/curated-fonts';
+import type { Style } from '@/lib/types';
 
 export function PresetsBar() {
   const { style, applyStylePreset, resegment } = useEditor();
@@ -35,8 +38,27 @@ export function PresetsBar() {
     void (async () => {
       const list = await listSharedPresets();
       setSharedPresets(list);
+      // Preload fonts referenced by shared presets so clicking a chip
+      // doesn't briefly render in the fallback font (which typically has
+      // a smaller x-height and makes the preset look smaller than the
+      // author intended).
+      for (const p of list) {
+        const fam = p.style.fontFamily;
+        if (GOOGLE_FONTS.includes(fam)) loadGoogleFont(fam, p.style.fontWeight);
+        else if (findCuratedFont(fam)) loadCuratedFontFamily(fam);
+      }
     })();
   }, []);
+
+  // Apply a preset while guaranteeing its font is loaded. Both built-in
+  // and shared presets go through this so the visual parity matches what
+  // the author saw when they published.
+  const applyPresetWithFont = (presetStyle: Style) => {
+    const fam = presetStyle.fontFamily;
+    if (GOOGLE_FONTS.includes(fam)) loadGoogleFont(fam, presetStyle.fontWeight);
+    else if (findCuratedFont(fam)) loadCuratedFontFamily(fam);
+    applyStylePreset({ ...DEFAULT_STYLE, ...presetStyle });
+  };
 
   const onPublishPreset = async (p: UserStylePreset) => {
     if (!window.confirm(`Publish "${p.label}" to the shared library?`)) return;
@@ -94,7 +116,7 @@ export function PresetsBar() {
             variant="secondary"
             size="sm"
             className="shrink-0"
-            onClick={() => applyStylePreset(p.style)}
+            onClick={() => applyPresetWithFont(p.style)}
           >
             {p.label}
           </Button>
@@ -111,7 +133,7 @@ export function PresetsBar() {
               type="button"
               // Merge over DEFAULT_STYLE so presets saved before a new
               // Style field was added still apply cleanly.
-              onClick={() => applyStylePreset({ ...DEFAULT_STYLE, ...p.style })}
+              onClick={() => applyPresetWithFont(p.style)}
               className="bg-bg-elev px-2 py-1 text-xs text-text hover:bg-bg-hi"
               title={`Apply preset "${p.label}"`}
             >
@@ -149,7 +171,7 @@ export function PresetsBar() {
             variant="secondary"
             size="sm"
             className="shrink-0 italic"
-            onClick={() => applyStylePreset({ ...DEFAULT_STYLE, ...p.style })}
+            onClick={() => applyPresetWithFont(p.style)}
             title={`Shared preset · ${p.label}`}
           >
             {p.label}
