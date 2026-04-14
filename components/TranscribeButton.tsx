@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
+import { transcribeAudio } from '@/lib/transcribe';
 import { Button } from './ui/button';
 
 // Shown once audio has been extracted. Groq transcription doesn't stream
@@ -61,32 +62,23 @@ export function TranscribeButton() {
     setStatus('transcribing', null);
     setProgress(0);
     try {
-      const fd = new FormData();
-      fd.append(
-        'audio',
-        new Blob([extractedAudio as BlobPart], { type: 'audio/ogg' }),
-        'audio.ogg',
+      const words = await transcribeAudio(
+        extractedAudio,
+        videoDuration,
+        (done, total) => setProgress(total > 0 ? done / total : 0),
       );
-      const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(j.error || `Transcription failed (${res.status})`);
-      }
-      const json = (await res.json()) as {
-        words: { text: string; start: number; end: number }[];
-      };
-      if (!json.words || json.words.length === 0) {
+      if (words.length === 0) {
         throw new Error(
           'Groq returned no words (is the clip silent / music-only?)',
         );
       }
-      setWords(json.words);
+      setWords(words);
       setProgress(1);
     } catch (e) {
       console.error('[transcribe] failed', e);
       setStatus('error', e instanceof Error ? e.message : 'Unknown error');
     }
-  }, [extractedAudio, setStatus, setProgress, setWords]);
+  }, [extractedAudio, videoDuration, setStatus, setProgress, setWords]);
 
   if (status !== 'audio-ready' && status !== 'transcribing') return null;
   // Banner was dismissed — transcribe is still reachable from the subtitle tab.
@@ -183,32 +175,23 @@ export function TranscribeInlineButton() {
     setStatus('transcribing', null);
     setProgress(0);
     try {
-      const fd = new FormData();
-      fd.append(
-        'audio',
-        new Blob([extractedAudio as BlobPart], { type: 'audio/ogg' }),
-        'audio.ogg',
+      const words = await transcribeAudio(
+        extractedAudio,
+        videoDuration,
+        (done, total) => setProgress(total > 0 ? done / total : 0),
       );
-      const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(j.error || `Transcription failed (${res.status})`);
-      }
-      const json = (await res.json()) as {
-        words: { text: string; start: number; end: number }[];
-      };
-      if (!json.words || json.words.length === 0) {
+      if (words.length === 0) {
         throw new Error(
           'Groq returned no words (is the clip silent / music-only?)',
         );
       }
-      setWords(json.words);
+      setWords(words);
       setProgress(1);
     } catch (e) {
       console.error('[transcribe] failed', e);
       setStatus('error', e instanceof Error ? e.message : 'Unknown error');
     }
-  }, [extractedAudio, setStatus, setProgress, setWords]);
+  }, [extractedAudio, videoDuration, setStatus, setProgress, setWords]);
 
   if (status !== 'audio-ready') return null;
 
