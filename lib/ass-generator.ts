@@ -381,12 +381,12 @@ export function generateAss({
 
   const events: string[] = [];
 
-  // One-frame gap (~40ms, safe for any common frame rate) prevents consecutive
-  // cues from visually overlapping in libass when source timings have slight
-  // overlap. The DOM preview doesn't show this because CSS paints only the
-  // last active block on top, but libass renders every active cue — including
-  // two rounded backgrounds stacked on the same line.
-  const OVERLAP_GUARD_SEC = 0.04;
+  // Minimal 10ms gap (one ASS centisecond, the format's timestamp precision)
+  // prevents consecutive cues from visually overlapping in libass when source
+  // timings have slight overlap. The DOM preview doesn't show this because CSS
+  // paints only the last active block on top, but libass renders every active
+  // cue — including two rounded backgrounds stacked on the same line.
+  const OVERLAP_GUARD_SEC = 0.01;
 
   blocks.forEach((b, i) => {
     const next = blocks[i + 1];
