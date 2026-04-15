@@ -27,7 +27,7 @@ const RADIUS_BOOST = 1.4;       // 40% more radius to match small-scale percepti
 // than Canvas (CoreText) at the same nominal size, so scaling by the full
 // FONT_SIZE_BOOST (1.7) overshoots and gives visibly oversized boxes; leaving
 // it at 1.0 undershoots. 1.35 is the empirical sweet spot.
-const BOX_SCALE = 1.35;
+const BOX_SCALE = 1.2;
 // Vertical correction applied to the rounded background box (NOT the text).
 // libass anchors centered text on the em-box midline, which sits BELOW the
 // visual ink midline in screen coordinates (ascenders extend higher than
