@@ -27,7 +27,7 @@ const RADIUS_BOOST = 1.4;       // 40% more radius to match small-scale percepti
 // than Canvas (CoreText) at the same nominal size, so scaling by the full
 // FONT_SIZE_BOOST (1.7) overshoots and gives visibly oversized boxes; leaving
 // it at 1.0 undershoots. 1.35 is the empirical sweet spot.
-const BOX_SCALE = 1.17;
+const BOX_SCALE = 1.22;
 // Vertical correction applied to the rounded background box (NOT the text).
 // libass anchors centered text on the em-box midline, which sits BELOW the
 // visual ink midline in screen coordinates (ascenders extend higher than
@@ -35,7 +35,7 @@ const BOX_SCALE = 1.17;
 // Sliding the box up by a fraction of the boosted font size makes the box
 // wrap the visible ink instead of the metric envelope — without touching
 // any text \pos, so different-sized texts can't drift toward each other.
-const BOX_VERTICAL_NUDGE = 0.02;
+const BOX_VERTICAL_NUDGE = -0.05;
 
 function hexToAssColor(hex: string, alpha = 1): string {
   const h = hex.replace('#', '').padEnd(6, '0');
