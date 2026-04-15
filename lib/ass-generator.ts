@@ -21,11 +21,13 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 // nominal font size. FONT_SIZE_BOOST compensates.
 const FONT_SIZE_BOOST = 1.7;    // matches CSS/CoreText rendering weight
 const RADIUS_BOOST = 1.4;       // 40% more radius to match small-scale perception
-// Background box scale is independent of font scale — libass renders the same
-// nominal font-size narrower than CSS measures it, so scaling the box by
-// FONT_SIZE_BOOST overshoots and produces visibly oversized boxes. 1.0 means
-// "trust the canvas-measured text width, just add the configured padding".
-const BOX_SCALE = 1.0;
+// Background box scale must track FONT_SIZE_BOOST: metrics come from Canvas
+// measureText at the NOMINAL fontSize, but libass actually paints text at
+// fontSize × FONT_SIZE_BOOST (via the \fs override). Scaling the box by the
+// same factor keeps the rounded background wrapping the text instead of
+// hugging the un-boosted nominal width (which was ~60% of the painted text
+// and looked "half-size" — especially obvious at 4K where text is larger).
+const BOX_SCALE = FONT_SIZE_BOOST;
 // Vertical correction applied to the rounded background box (NOT the text).
 // libass anchors centered text on the em-box midline, which sits BELOW the
 // visual ink midline in screen coordinates (ascenders extend higher than
