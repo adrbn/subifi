@@ -71,3 +71,15 @@ input[type="color"]::-webkit-color-swatch { border: 2px solid #3a3a50; border-ra
   0%   { transform: translateX(0%)    skewX(-12deg); }
   100% { transform: translateX(400%)  skewX(-12deg); }
 }
+
+/* Wiggle effect: each character gets a staggered animation-delay so the
+   motion looks organic rather than a synchronised shake. Amplitude comes
+   from a CSS var so the StylePanel sliders can drive it directly. */
+@keyframes subifi-wiggle {
+  0%, 100% {
+    transform: translateY(calc(var(--wig-amp, 4px) * -1)) rotate(calc(var(--wig-rot, 6deg) * -1));
+  }
+  50% {
+    transform: translateY(var(--wig-amp, 4px)) rotate(var(--wig-rot, 6deg));
+  }
+}

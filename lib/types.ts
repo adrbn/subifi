@@ -69,6 +69,13 @@ export type Style = {
   // Color used for words that have NOT yet been spoken (the "dim" color).
   // The active and already-spoken words use textColor.
   karaokeBaseColor: string;
+  // Wiggle effect: each character gets a small per-glyph offset so the text
+  // looks alive. Preview renders an animated staggered CSS transform; the
+  // ASS burn emits a static per-character \frz rotation (same amplitude)
+  // because libass can't cheaply animate a continuous wiggle.
+  wiggle: boolean;
+  wiggleAmplitude: number; // degrees (and rough px offset in preview)
+  wiggleSpeed: number; // Hz — preview only
 };
 
 export type SegmentationMode = 'cinema' | 'tiktok' | 'word' | 'custom';
@@ -134,6 +141,9 @@ export type TextOverlay = {
   backgroundRadius: number;
   textAlign: 'left' | 'center' | 'right';
   maxWidth: number; // 0..1
+  wiggle?: boolean;
+  wiggleAmplitude?: number;
+  wiggleSpeed?: number;
 };
 
 // A cut is a time range that is REMOVED from the source video at burn time.

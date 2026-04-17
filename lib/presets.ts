@@ -33,6 +33,9 @@ const baseStyle: Style = {
   wordSpacing: 0,
   karaoke: false,
   karaokeBaseColor: '#94a3b8', // slate-400 — neutral dim
+  wiggle: false,
+  wiggleAmplitude: 6,
+  wiggleSpeed: 2,
 };
 
 export const STYLE_PRESETS: StylePreset[] = [

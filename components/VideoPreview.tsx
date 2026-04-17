@@ -33,6 +33,50 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
+// Render text with a per-character wiggle animation. Splits on graphemes
+// (via spread) so multi-byte codepoints stay intact; preserves \n by
+// emitting <br /> and keeps spaces as non-collapsing spans so alignment
+// is untouched. Each span gets a staggered animationDelay derived from
+// its index so the motion looks organic, not synchronised.
+function renderWiggleText(
+  text: string,
+  amplitude: number,
+  speed: number,
+  scale: number,
+): React.ReactNode {
+  const durationMs = Math.max(120, Math.round(1000 / Math.max(0.1, speed)));
+  const ampPx = amplitude * scale * 0.5; // amplitude is in "degrees-ish"
+  const rotDeg = amplitude;
+  const lines = text.split('\n');
+  const nodes: React.ReactNode[] = [];
+  let idx = 0;
+  lines.forEach((line, li) => {
+    const chars = Array.from(line);
+    chars.forEach((ch, ci) => {
+      const delay = ((idx * 73) % durationMs) - durationMs;
+      nodes.push(
+        <span
+          key={`${li}-${ci}`}
+          style={{
+            display: 'inline-block',
+            whiteSpace: 'pre',
+            animation: `subifi-wiggle ${durationMs}ms ease-in-out infinite`,
+            animationDelay: `${delay}ms`,
+            // Per-span CSS vars feed the keyframes.
+            ['--wig-amp' as string]: `${ampPx}px`,
+            ['--wig-rot' as string]: `${rotDeg}deg`,
+          } as React.CSSProperties}
+        >
+          {ch}
+        </span>,
+      );
+      idx++;
+    });
+    if (li < lines.length - 1) nodes.push(<br key={`br-${li}`} />);
+  });
+  return nodes;
+}
+
 function SafeZoneOverlay({ zone }: { zone: SafeZone }): React.ReactElement | null {
   if (zone.preset === 'off') return null;
   // Solid tint + dashed border. We deliberately avoid `mixBlendMode: multiply`
@@ -707,6 +751,13 @@ export function VideoPreview() {
                     minWidth: 80,
                   }}
                 />
+              ) : ov.wiggle ? (
+                renderWiggleText(
+                  ov.text,
+                  ov.wiggleAmplitude ?? 6,
+                  ov.wiggleSpeed ?? 2,
+                  scale,
+                )
               ) : (
                 ov.text
               )}
@@ -839,6 +890,13 @@ export function VideoPreview() {
                     </span>
                   );
                 })
+              ) : effectiveStyle.wiggle ? (
+                renderWiggleText(
+                  blk.text,
+                  effectiveStyle.wiggleAmplitude ?? 6,
+                  effectiveStyle.wiggleSpeed ?? 2,
+                  scale,
+                )
               ) : (
                 blk.text
               )}

@@ -67,6 +67,40 @@ function escapeAssText(text: string): string {
     .replace(/\}/g, '\\}');
 }
 
+// Wrap each visible character in a per-glyph rotation override so the burn
+// picks up a static "wiggly" look. libass applies \frz to every subsequent
+// glyph until reset, so we alternate the sign sample-by-sample to mimic the
+// animated preview frozen at t=0. Skips \N (newline) tokens and spaces
+// (spaces don't rotate visibly and keep alignment cleaner).
+function applyAssWiggle(escapedText: string, amplitude: number): string {
+  if (amplitude <= 0) return escapedText;
+  const out: string[] = [];
+  let i = 0;
+  let k = 0;
+  while (i < escapedText.length) {
+    // Preserve \N as a single token.
+    if (escapedText[i] === '\\' && escapedText[i + 1] === 'N') {
+      out.push('\\N');
+      i += 2;
+      continue;
+    }
+    const ch = escapedText[i];
+    if (ch === ' ') {
+      out.push(' ');
+      i++;
+      continue;
+    }
+    // Phase-shifted sine so alternating chars tilt both ways organically.
+    const rot = Math.round(Math.sin(k * 1.3) * amplitude);
+    out.push(`{\\frz${rot}}${ch}`);
+    i++;
+    k++;
+  }
+  // Reset rotation at the end so subsequent tags inherit a clean baseline.
+  out.push('{\\frz0}');
+  return out.join('');
+}
+
 function alignmentNumber(textAlign: Style['textAlign']): number {
   // middle row in ASS numpad layout; vertical anchor == middle
   if (textAlign === 'left') return 4;
@@ -334,6 +368,9 @@ export function generateAss({
       wordSpacing: 0,
       karaoke: false,
       karaokeBaseColor: '#94a3b8',
+      wiggle: t.wiggle ?? false,
+      wiggleAmplitude: t.wiggleAmplitude ?? 6,
+      wiggleSpeed: t.wiggleSpeed ?? 2,
     };
     const needsDual = t.backgroundOpacity > 0 &&
       (t.backgroundRadius ?? 0) > 0 &&
@@ -417,6 +454,11 @@ export function generateAss({
     if (fallbackFonts.cjk) {
       text = wrapCjkRuns(text, merged.fontFamily, fallbackFonts.cjk);
     }
+    // Wiggle is incompatible with karaoke (karaoke owns per-word colour
+    // switching via \k tags and per-char \frz would interleave badly).
+    if (merged.wiggle && !karaokeText) {
+      text = applyAssWiggle(text, merged.wiggleAmplitude ?? 6);
+    }
 
     if (dual) {
       // --- Dual-layer: \p1 drawn rounded background + text overlay ---
@@ -477,6 +519,9 @@ export function generateAss({
     let text = escapeAssText(t.text);
     if (fallbackFonts.cjk) {
       text = wrapCjkRuns(text, t.fontFamily, fallbackFonts.cjk);
+    }
+    if (t.wiggle) {
+      text = applyAssWiggle(text, t.wiggleAmplitude ?? 6);
     }
     const tx = Math.round(t.positionX * videoWidth);
     const ty = Math.round(t.positionY * videoHeight);

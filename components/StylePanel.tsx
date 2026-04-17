@@ -485,6 +485,81 @@ export function StylePanel() {
 
       <hr className="border-border" />
 
+      {/* Effects — per-target animated treatments. The "wiggle" effect
+          renders an animated staggered transform in the preview and a
+          static per-glyph \frz rotation in the ASS burn, so the exported
+          MP4 keeps the wavy look even without per-frame animation. */}
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+        Effects
+      </h3>
+      {(() => {
+        const wiggleOn = isTextMode
+          ? !!selectedText!.wiggle
+          : isBlockMode
+            ? !!(blockStyle!.wiggle ?? style.wiggle)
+            : !!style.wiggle;
+        const wiggleAmp = isTextMode
+          ? (selectedText!.wiggleAmplitude ?? 6)
+          : isBlockMode
+            ? (blockStyle!.wiggleAmplitude ?? style.wiggleAmplitude ?? 6)
+            : (style.wiggleAmplitude ?? 6);
+        const wiggleSpeed = isTextMode
+          ? (selectedText!.wiggleSpeed ?? 2)
+          : isBlockMode
+            ? (blockStyle!.wiggleSpeed ?? style.wiggleSpeed ?? 2)
+            : (style.wiggleSpeed ?? 2);
+        const karaokeOn = !isTextMode &&
+          (isBlockMode
+            ? (blockStyle!.karaoke ?? style.karaoke)
+            : style.karaoke);
+        return (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-text-muted">Wiggle</span>
+              <input
+                type="checkbox"
+                checked={wiggleOn}
+                disabled={karaokeOn}
+                onChange={(e) => set({ wiggle: e.target.checked })}
+                title={
+                  karaokeOn
+                    ? 'Disable karaoke first — the two effects conflict'
+                    : 'Animated per-character wiggle'
+                }
+              />
+            </div>
+            {karaokeOn && (
+              <div className="text-[10px] text-text-muted">
+                Wiggle is hidden while karaoke is on (they fight for the
+                same per-glyph tags).
+              </div>
+            )}
+            {wiggleOn && !karaokeOn && (
+              <>
+                <Slider
+                  label="Amplitude"
+                  min={1}
+                  max={30}
+                  value={wiggleAmp}
+                  unit="°"
+                  onChange={(v) => set({ wiggleAmplitude: v })}
+                />
+                <Slider
+                  label="Speed"
+                  min={1}
+                  max={10}
+                  value={wiggleSpeed}
+                  unit="Hz"
+                  onChange={(v) => set({ wiggleSpeed: v })}
+                />
+              </>
+            )}
+          </>
+        );
+      })()}
+
+      <hr className="border-border" />
+
       {/* Image overlays */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
