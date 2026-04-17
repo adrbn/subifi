@@ -72,14 +72,13 @@ input[type="color"]::-webkit-color-swatch { border: 2px solid #3a3a50; border-ra
   100% { transform: translateX(400%)  skewX(-12deg); }
 }
 
-/* Wiggle effect: each character gets a staggered animation-delay so the
-   motion looks organic rather than a synchronised shake. Amplitude comes
-   from a CSS var so the StylePanel sliders can drive it directly. */
-@keyframes subifi-wiggle {
-  0%, 100% {
-    transform: translateY(calc(var(--wig-amp, 4px) * -1)) rotate(calc(var(--wig-rot, 6deg) * -1));
-  }
-  50% {
-    transform: translateY(var(--wig-amp, 4px)) rotate(var(--wig-rot, 6deg));
-  }
+/* Jitter / boil effect: each character snaps between 3 random offsets with
+   `steps()` timing so the motion is choppy like hand-drawn frames (the 2D
+   animation "boil" effect) rather than a smooth wave. Offsets are fed in
+   via per-span CSS vars seeded from the character index. */
+@keyframes subifi-jitter {
+  0%   { transform: translate(var(--jx0, 0), var(--jy0, 0)) rotate(var(--jr0, 0deg)); }
+  33%  { transform: translate(var(--jx1, 0), var(--jy1, 0)) rotate(var(--jr1, 0deg)); }
+  66%  { transform: translate(var(--jx2, 0), var(--jy2, 0)) rotate(var(--jr2, 0deg)); }
+  100% { transform: translate(var(--jx0, 0), var(--jy0, 0)) rotate(var(--jr0, 0deg)); }
 }

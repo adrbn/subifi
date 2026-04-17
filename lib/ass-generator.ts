@@ -67,18 +67,23 @@ function escapeAssText(text: string): string {
     .replace(/\}/g, '\\}');
 }
 
-// Wrap each visible character in a per-glyph rotation override so the burn
-// picks up a static "wiggly" look. libass applies \frz to every subsequent
-// glyph until reset, so we alternate the sign sample-by-sample to mimic the
-// animated preview frozen at t=0. Skips \N (newline) tokens and spaces
-// (spaces don't rotate visibly and keep alignment cleaner).
-function applyAssWiggle(escapedText: string, amplitude: number): string {
+// Apply a static "boil" / jitter look to each glyph. libass can't cheaply
+// animate a repeating random tremble (would need many Dialogue events per
+// block), so we freeze a single random frame of the effect by tagging each
+// character with small random \frz rotation and \fscx/\fscy scale jitter.
+// The values come from a deterministic PRNG seeded on the char index so
+// the same block always renders identically.
+function jitterRand(seed: number): number {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return (x - Math.floor(x)) * 2 - 1;
+}
+
+function applyAssJitter(escapedText: string, amplitude: number): string {
   if (amplitude <= 0) return escapedText;
   const out: string[] = [];
   let i = 0;
-  let k = 0;
+  let k = 1;
   while (i < escapedText.length) {
-    // Preserve \N as a single token.
     if (escapedText[i] === '\\' && escapedText[i + 1] === 'N') {
       out.push('\\N');
       i += 2;
@@ -90,14 +95,14 @@ function applyAssWiggle(escapedText: string, amplitude: number): string {
       i++;
       continue;
     }
-    // Phase-shifted sine so alternating chars tilt both ways organically.
-    const rot = Math.round(Math.sin(k * 1.3) * amplitude);
-    out.push(`{\\frz${rot}}${ch}`);
+    const rot = Math.round(jitterRand(k) * amplitude);
+    const sx = Math.round(100 + jitterRand(k + 137) * Math.min(12, amplitude));
+    const sy = Math.round(100 + jitterRand(k + 271) * Math.min(12, amplitude));
+    out.push(`{\\frz${rot}\\fscx${sx}\\fscy${sy}}${ch}`);
     i++;
     k++;
   }
-  // Reset rotation at the end so subsequent tags inherit a clean baseline.
-  out.push('{\\frz0}');
+  out.push('{\\frz0\\fscx100\\fscy100}');
   return out.join('');
 }
 
@@ -457,7 +462,7 @@ export function generateAss({
     // Wiggle is incompatible with karaoke (karaoke owns per-word colour
     // switching via \k tags and per-char \frz would interleave badly).
     if (merged.wiggle && !karaokeText) {
-      text = applyAssWiggle(text, merged.wiggleAmplitude ?? 6);
+      text = applyAssJitter(text, merged.wiggleAmplitude ?? 6);
     }
 
     if (dual) {
@@ -521,7 +526,7 @@ export function generateAss({
       text = wrapCjkRuns(text, t.fontFamily, fallbackFonts.cjk);
     }
     if (t.wiggle) {
-      text = applyAssWiggle(text, t.wiggleAmplitude ?? 6);
+      text = applyAssJitter(text, t.wiggleAmplitude ?? 6);
     }
     const tx = Math.round(t.positionX * videoWidth);
     const ty = Math.round(t.positionY * videoHeight);

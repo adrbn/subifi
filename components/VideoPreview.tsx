@@ -33,38 +33,55 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-// Render text with a per-character wiggle animation. Splits on graphemes
-// (via spread) so multi-byte codepoints stay intact; preserves \n by
-// emitting <br /> and keeps spaces as non-collapsing spans so alignment
-// is untouched. Each span gets a staggered animationDelay derived from
-// its index so the motion looks organic, not synchronised.
-function renderWiggleText(
+// Cheap deterministic pseudo-random in [-1, 1] from an integer seed. We
+// need determinism (same seed → same number) so the keyframe offsets don't
+// reshuffle on every React re-render and cause the text to flash.
+function jitterRand(seed: number): number {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return (x - Math.floor(x)) * 2 - 1;
+}
+
+// Render text with a per-character JITTER (a.k.a. "boil") animation. Each
+// glyph snaps between three randomised offsets using `steps(1)` timing, so
+// the motion is choppy — mimicking hand-drawn 2D animation where redrawn
+// lines never land in exactly the same place. Spaces and newlines are
+// preserved. Per-letter seeded randomness means no flicker across renders.
+function renderJitterText(
   text: string,
   amplitude: number,
   speed: number,
   scale: number,
 ): React.ReactNode {
   const durationMs = Math.max(120, Math.round(1000 / Math.max(0.1, speed)));
-  const ampPx = amplitude * scale * 0.5; // amplitude is in "degrees-ish"
-  const rotDeg = amplitude;
+  const ampPx = amplitude * scale * 0.6;
   const lines = text.split('\n');
   const nodes: React.ReactNode[] = [];
   let idx = 0;
   lines.forEach((line, li) => {
     const chars = Array.from(line);
     chars.forEach((ch, ci) => {
-      const delay = ((idx * 73) % durationMs) - durationMs;
+      const s = idx + 1;
+      const xs = [jitterRand(s), jitterRand(s + 101), jitterRand(s + 211)];
+      const ys = [jitterRand(s + 307), jitterRand(s + 409), jitterRand(s + 521)];
+      const rs = [jitterRand(s + 617), jitterRand(s + 719), jitterRand(s + 823)];
+      const delay = ((idx * 53) % durationMs) - durationMs;
       nodes.push(
         <span
           key={`${li}-${ci}`}
           style={{
             display: 'inline-block',
             whiteSpace: 'pre',
-            animation: `subifi-wiggle ${durationMs}ms ease-in-out infinite`,
+            animation: `subifi-jitter ${durationMs}ms steps(1, end) infinite`,
             animationDelay: `${delay}ms`,
-            // Per-span CSS vars feed the keyframes.
-            ['--wig-amp' as string]: `${ampPx}px`,
-            ['--wig-rot' as string]: `${rotDeg}deg`,
+            ['--jx0' as string]: `${(xs[0] * ampPx).toFixed(2)}px`,
+            ['--jy0' as string]: `${(ys[0] * ampPx).toFixed(2)}px`,
+            ['--jr0' as string]: `${(rs[0] * amplitude).toFixed(2)}deg`,
+            ['--jx1' as string]: `${(xs[1] * ampPx).toFixed(2)}px`,
+            ['--jy1' as string]: `${(ys[1] * ampPx).toFixed(2)}px`,
+            ['--jr1' as string]: `${(rs[1] * amplitude).toFixed(2)}deg`,
+            ['--jx2' as string]: `${(xs[2] * ampPx).toFixed(2)}px`,
+            ['--jy2' as string]: `${(ys[2] * ampPx).toFixed(2)}px`,
+            ['--jr2' as string]: `${(rs[2] * amplitude).toFixed(2)}deg`,
           } as React.CSSProperties}
         >
           {ch}
@@ -752,7 +769,7 @@ export function VideoPreview() {
                   }}
                 />
               ) : ov.wiggle ? (
-                renderWiggleText(
+                renderJitterText(
                   ov.text,
                   ov.wiggleAmplitude ?? 6,
                   ov.wiggleSpeed ?? 2,
@@ -891,7 +908,7 @@ export function VideoPreview() {
                   );
                 })
               ) : effectiveStyle.wiggle ? (
-                renderWiggleText(
+                renderJitterText(
                   blk.text,
                   effectiveStyle.wiggleAmplitude ?? 6,
                   effectiveStyle.wiggleSpeed ?? 2,

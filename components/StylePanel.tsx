@@ -485,10 +485,11 @@ export function StylePanel() {
 
       <hr className="border-border" />
 
-      {/* Effects — per-target animated treatments. The "wiggle" effect
-          renders an animated staggered transform in the preview and a
-          static per-glyph \frz rotation in the ASS burn, so the exported
-          MP4 keeps the wavy look even without per-frame animation. */}
+      {/* Effects — per-target animated treatments. The "jitter" (a.k.a.
+          boil) effect mimics hand-drawn 2D animation where each redrawn
+          line lands slightly off. Preview: stepped per-char CSS animation
+          between random offsets. Export: static per-glyph \frz + \fscx/y
+          jitter frozen at one frame (libass can't cheaply animate it). */}
       <h3 className="text-xs font-semibold uppercase tracking-wider text-text-muted">
         Effects
       </h3>
@@ -515,7 +516,7 @@ export function StylePanel() {
         return (
           <>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-text-muted">Wiggle</span>
+              <span className="text-xs text-text-muted">Jitter (boil)</span>
               <input
                 type="checkbox"
                 checked={wiggleOn}
@@ -524,13 +525,13 @@ export function StylePanel() {
                 title={
                   karaokeOn
                     ? 'Disable karaoke first — the two effects conflict'
-                    : 'Animated per-character wiggle'
+                    : 'Per-character jitter / text boil'
                 }
               />
             </div>
             {karaokeOn && (
               <div className="text-[10px] text-text-muted">
-                Wiggle is hidden while karaoke is on (they fight for the
+                Jitter is hidden while karaoke is on (they fight for the
                 same per-glyph tags).
               </div>
             )}
