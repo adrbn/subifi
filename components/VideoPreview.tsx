@@ -33,6 +33,38 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
+// Compute entrance-animation state for a block or overlay at the current
+// playhead. Returns opacity (for fade), a scale multiplier (for pop), and
+// `revealChars` — the number of visible leading characters for typewriter
+// (Infinity when the effect is not typewriter). Callers multiply / slice
+// accordingly before handing text to the renderer.
+function entranceState(
+  kind: 'none' | 'typewriter' | 'pop' | 'fade' | undefined,
+  durSec: number,
+  t: number,
+  start: number,
+  end: number,
+): { opacity: number; scale: number; revealChars: number } {
+  const dur = Math.max(0.05, Math.min(3, durSec || 0.3));
+  const inProg = clamp01((t - start) / dur);
+  if (!kind || kind === 'none' || t < start) {
+    return { opacity: 1, scale: 1, revealChars: Infinity };
+  }
+  if (kind === 'fade') {
+    const outProg = clamp01((end - t) / dur);
+    return { opacity: Math.min(inProg, outProg), scale: 1, revealChars: Infinity };
+  }
+  if (kind === 'pop') {
+    // 0 → 1.15 at 70% of duration, then 1.15 → 1.0 by duration end.
+    let s: number;
+    if (inProg < 0.7) s = (inProg / 0.7) * 1.15;
+    else s = 1.15 - ((inProg - 0.7) / 0.3) * 0.15;
+    return { opacity: 1, scale: s, revealChars: Infinity };
+  }
+  // typewriter
+  return { opacity: 1, scale: 1, revealChars: inProg }; // caller scales to text length
+}
+
 // Cheap deterministic pseudo-random in [-1, 1] from an integer seed. We
 // need determinism (same seed → same number) so the keyframe offsets don't
 // reshuffle on every React re-render and cause the text to flash.
@@ -729,15 +761,26 @@ export function VideoPreview() {
             subs on top, then texts, then images at the bottom). */}
         {(textOverlaysVisible ? textOverlays : [])
           .filter((ov) => t >= ov.start - 0.001 && t <= ov.end + 0.001)
-          .map((ov) => (
+          .map((ov) => {
+            const ent =
+              editingTextOverlayId === ov.id
+                ? { opacity: 1, scale: 1, revealChars: Infinity }
+                : entranceState(ov.entrance, ov.entranceDuration ?? 0.3, t, ov.start, ov.end);
+            const base = textOverlayStyle(
+              ov,
+              scale,
+              selectedTextOverlayId === ov.id,
+              draggingTextOverlayId === ov.id,
+            );
+            const styled: React.CSSProperties = {
+              ...base,
+              opacity: ent.opacity,
+              transform: `translate(-50%, -50%) scale(${ent.scale})`,
+            };
+            return (
             <div
               key={ov.id}
-              style={textOverlayStyle(
-                ov,
-                scale,
-                selectedTextOverlayId === ov.id,
-                draggingTextOverlayId === ov.id,
-              )}
+              style={styled}
               onPointerDown={onTextOverlayPointerDown(ov.id)}
               onWheel={onTextOverlayWheel(ov)}
               onDoubleClick={(e) => {
@@ -768,18 +811,29 @@ export function VideoPreview() {
                     minWidth: 80,
                   }}
                 />
-              ) : ov.wiggle ? (
-                renderJitterText(
-                  ov.text,
-                  ov.wiggleAmplitude ?? 6,
-                  ov.wiggleSpeed ?? 2,
-                  scale,
-                )
-              ) : (
-                ov.text
-              )}
+              ) : (() => {
+                const typewriter = ov.entrance === 'typewriter';
+                const total = Array.from(ov.text).length;
+                const shown = typewriter
+                  ? Math.min(total, Math.floor(ent.revealChars * total))
+                  : total;
+                const visibleText = typewriter
+                  ? Array.from(ov.text).slice(0, shown).join('')
+                  : ov.text;
+                return ov.wiggle ? (
+                  renderJitterText(
+                    visibleText,
+                    ov.wiggleAmplitude ?? 6,
+                    ov.wiggleSpeed ?? 2,
+                    scale,
+                  )
+                ) : (
+                  visibleText
+                );
+              })()}
             </div>
-          ))}
+            );
+          })}
 
         {/* Subtitle blocks — topmost layer (matching timeline order). */}
         {/* Snap guide lines — only visible while dragging */}
@@ -836,13 +890,26 @@ export function VideoPreview() {
             scale,
             subtitleDragging,
           );
-          const styled: React.CSSProperties = isSelected
-            ? {
-                ...baseStyle,
-                outline: '2px dashed #60a5fa',
-                outlineOffset: 4,
-              }
-            : baseStyle;
+          // Entrance animation — skipped while editing so the textarea stays
+          // responsive. Typewriter reveal uses the progress 0..1 to slice
+          // text; fade/pop modify opacity/scale of the whole block.
+          const ent = isEditing
+            ? { opacity: 1, scale: 1, revealChars: Infinity }
+            : entranceState(
+                effectiveStyle.entrance,
+                effectiveStyle.entranceDuration ?? 0.3,
+                t,
+                blk.start,
+                blk.end,
+              );
+          const styled: React.CSSProperties = {
+            ...baseStyle,
+            ...(isSelected
+              ? { outline: '2px dashed #60a5fa', outlineOffset: 4 }
+              : {}),
+            opacity: ent.opacity,
+            transform: `translate(-50%, -50%) scale(${ent.scale})`,
+          };
           return (
             <div
               key={blk.id}
@@ -907,16 +974,29 @@ export function VideoPreview() {
                     </span>
                   );
                 })
-              ) : effectiveStyle.wiggle ? (
-                renderJitterText(
-                  blk.text,
-                  effectiveStyle.wiggleAmplitude ?? 6,
-                  effectiveStyle.wiggleSpeed ?? 2,
-                  scale,
-                )
-              ) : (
-                blk.text
-              )}
+              ) : (() => {
+                // Typewriter reveal: slice text to the current progress.
+                // Spaces and newlines count as characters so timing stays
+                // predictable; the blank trailing chars simply take no ink.
+                const typewriter = effectiveStyle.entrance === 'typewriter';
+                const total = Array.from(blk.text).length;
+                const shown = typewriter
+                  ? Math.min(total, Math.floor(ent.revealChars * total))
+                  : total;
+                const visibleText = typewriter
+                  ? Array.from(blk.text).slice(0, shown).join('')
+                  : blk.text;
+                return effectiveStyle.wiggle ? (
+                  renderJitterText(
+                    visibleText,
+                    effectiveStyle.wiggleAmplitude ?? 6,
+                    effectiveStyle.wiggleSpeed ?? 2,
+                    scale,
+                  )
+                ) : (
+                  visibleText
+                );
+              })()}
             </div>
           );
         })}

@@ -78,6 +78,85 @@ function jitterRand(seed: number): number {
   return (x - Math.floor(x)) * 2 - 1;
 }
 
+// Build the entrance-animation prefix / per-char wrapper. Returns an object
+// with a block-level prefix (prepended once before the text) and an optional
+// per-character transform to apply during text assembly. Durations come in
+// milliseconds to match libass \t conventions.
+//
+// - 'fade': native \fad(inMs, outMs) — symmetric fade in + fade out.
+// - 'pop':  start at scale 0, transition to scale 100 with a light overshoot
+//   via two chained \t segments (0→115%, then 115%→100%).
+// - 'typewriter': each glyph starts invisible and reveals in sequence. We
+//   return a per-char wrapper; the block-level prefix stays empty.
+type EntranceKind = 'none' | 'typewriter' | 'pop' | 'fade';
+function buildEntrance(
+  kind: EntranceKind,
+  durSec: number,
+  blockDurSec: number,
+): { prefix: string; perCharWrap: ((ch: string, i: number, n: number) => string) | null } {
+  const dur = Math.max(0.05, Math.min(3, durSec));
+  if (kind === 'none' || dur <= 0) return { prefix: '', perCharWrap: null };
+  if (kind === 'fade') {
+    // Keep fade-out bounded by the block duration so short blocks don't
+    // over-fade. Subtract one frame of headroom.
+    const outDur = Math.min(dur, Math.max(0.05, blockDurSec - 0.05));
+    const inMs = Math.round(dur * 1000);
+    const outMs = Math.round(outDur * 1000);
+    return { prefix: `{\\fad(${inMs},${outMs})}`, perCharWrap: null };
+  }
+  if (kind === 'pop') {
+    const peakMs = Math.round(dur * 1000 * 0.7);
+    const endMs = Math.round(dur * 1000);
+    // Start tiny, spring to 115%, settle to 100%.
+    const prefix =
+      `{\\fscx0\\fscy0` +
+      `\\t(0,${peakMs},\\fscx115\\fscy115)` +
+      `\\t(${peakMs},${endMs},\\fscx100\\fscy100)}`;
+    return { prefix, perCharWrap: null };
+  }
+  // typewriter: per-char alpha transition. Each char i reveals over a ~60ms
+  // ramp starting at i * step. Earlier chars stay visible because libass
+  // captures override state at each glyph position.
+  const totalMs = Math.round(dur * 1000);
+  return {
+    prefix: '',
+    perCharWrap: (ch, i, n) => {
+      const step = Math.max(1, Math.floor(totalMs / Math.max(1, n)));
+      const t0 = i * step;
+      const t1 = t0 + Math.min(step + 40, 80);
+      return `{\\alpha&HFF&\\t(${t0},${t1},\\alpha&H00&)}${ch}`;
+    },
+  };
+}
+
+// Walk the escaped text character by character and invoke `wrap` for each
+// visible glyph. Preserves \N tokens and spaces (spaces reveal instantly
+// so whitespace doesn't create awkward gaps). Returns the transformed
+// string. Visible-glyph count is reported via `onCount` so callers can
+// size their per-char ramps.
+function mapAssGlyphs(
+  escapedText: string,
+  wrap: (ch: string, i: number, n: number) => string,
+): string {
+  // First pass: count visible glyphs.
+  let n = 0;
+  for (let i = 0; i < escapedText.length; i++) {
+    if (escapedText[i] === '\\' && escapedText[i + 1] === 'N') { i++; continue; }
+    if (escapedText[i] === ' ') continue;
+    n++;
+  }
+  const out: string[] = [];
+  let idx = 0;
+  for (let i = 0; i < escapedText.length; i++) {
+    const ch = escapedText[i];
+    if (ch === '\\' && escapedText[i + 1] === 'N') { out.push('\\N'); i++; continue; }
+    if (ch === ' ') { out.push(' '); continue; }
+    out.push(wrap(ch, idx, n));
+    idx++;
+  }
+  return out.join('');
+}
+
 function applyAssJitter(escapedText: string, amplitude: number): string {
   if (amplitude <= 0) return escapedText;
   const out: string[] = [];
@@ -376,6 +455,8 @@ export function generateAss({
       wiggle: t.wiggle ?? false,
       wiggleAmplitude: t.wiggleAmplitude ?? 6,
       wiggleSpeed: t.wiggleSpeed ?? 2,
+      entrance: t.entrance ?? 'none',
+      entranceDuration: t.entranceDuration ?? 0.3,
     };
     const needsDual = t.backgroundOpacity > 0 &&
       (t.backgroundRadius ?? 0) > 0 &&
@@ -464,6 +545,21 @@ export function generateAss({
     if (merged.wiggle && !karaokeText) {
       text = applyAssJitter(text, merged.wiggleAmplitude ?? 6);
     }
+    // Entrance animation. Typewriter needs per-glyph wrapping, so it must
+    // run on raw escaped text BEFORE jitter would re-tag each character.
+    // We run it here — if jitter is also on, its tags have already been
+    // inlined per glyph, and the typewriter wrap cleanly prefixes each
+    // pre-wrapped unit. Skipped when karaoke is active (they both use \t).
+    const entrance = merged.entrance ?? 'none';
+    const entranceDur = merged.entranceDuration ?? 0.3;
+    const blockDur = Math.max(0.1, clippedEnd - b.start);
+    if (entrance !== 'none' && !karaokeText) {
+      const ent = buildEntrance(entrance, entranceDur, blockDur);
+      if (ent.perCharWrap) {
+        text = mapAssGlyphs(text, ent.perCharWrap);
+      }
+      if (ent.prefix) text = ent.prefix + text;
+    }
 
     if (dual) {
       // --- Dual-layer: \p1 drawn rounded background + text overlay ---
@@ -527,6 +623,16 @@ export function generateAss({
     }
     if (t.wiggle) {
       text = applyAssJitter(text, t.wiggleAmplitude ?? 6);
+    }
+    const entrance = t.entrance ?? 'none';
+    const entranceDur = t.entranceDuration ?? 0.3;
+    const overlayDur = Math.max(0.1, t.end - t.start);
+    if (entrance !== 'none') {
+      const ent = buildEntrance(entrance, entranceDur, overlayDur);
+      if (ent.perCharWrap) {
+        text = mapAssGlyphs(text, ent.perCharWrap);
+      }
+      if (ent.prefix) text = ent.prefix + text;
     }
     const tx = Math.round(t.positionX * videoWidth);
     const ty = Math.round(t.positionY * videoHeight);

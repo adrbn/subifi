@@ -76,6 +76,11 @@ export type Style = {
   wiggle: boolean;
   wiggleAmplitude: number; // degrees (and rough px offset in preview)
   wiggleSpeed: number; // Hz — preview only
+  // Entrance animation applied at block start. 'fade' also fades out at the
+  // end (symmetric). 'pop' scales from 0 → 115% → 100%. 'typewriter' reveals
+  // one character at a time. entranceDuration is in seconds.
+  entrance: 'none' | 'typewriter' | 'pop' | 'fade';
+  entranceDuration: number;
 };
 
 export type SegmentationMode = 'cinema' | 'tiktok' | 'word' | 'custom';
@@ -144,6 +149,8 @@ export type TextOverlay = {
   wiggle?: boolean;
   wiggleAmplitude?: number;
   wiggleSpeed?: number;
+  entrance?: 'none' | 'typewriter' | 'pop' | 'fade';
+  entranceDuration?: number;
 };
 
 // A cut is a time range that is REMOVED from the source video at burn time.

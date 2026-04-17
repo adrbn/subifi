@@ -36,6 +36,8 @@ const baseStyle: Style = {
   wiggle: false,
   wiggleAmplitude: 6,
   wiggleSpeed: 2,
+  entrance: 'none',
+  entranceDuration: 0.3,
 };
 
 export const STYLE_PRESETS: StylePreset[] = [

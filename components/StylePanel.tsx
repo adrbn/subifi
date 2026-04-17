@@ -559,6 +559,61 @@ export function StylePanel() {
         );
       })()}
 
+      {/* Entrance animation — typewriter / pop / fade. Skipped for karaoke
+          subtitles since they already animate per-word with \k tags. */}
+      {(() => {
+        const entrance = (isTextMode
+          ? selectedText!.entrance
+          : isBlockMode
+            ? (blockStyle!.entrance ?? style.entrance)
+            : style.entrance) ?? 'none';
+        const entranceDur = (isTextMode
+          ? selectedText!.entranceDuration
+          : isBlockMode
+            ? (blockStyle!.entranceDuration ?? style.entranceDuration)
+            : style.entranceDuration) ?? 0.3;
+        const karaokeOn = !isTextMode &&
+          (isBlockMode
+            ? (blockStyle!.karaoke ?? style.karaoke)
+            : style.karaoke);
+        return (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-text-muted">Entrance</span>
+              <Select
+                className="w-32"
+                value={entrance}
+                disabled={karaokeOn}
+                onChange={(e) =>
+                  set({ entrance: e.target.value as typeof entrance })
+                }
+              >
+                <option value="none">None</option>
+                <option value="typewriter">Typewriter</option>
+                <option value="pop">Pop-in</option>
+                <option value="fade">Fade</option>
+              </Select>
+            </div>
+            {karaokeOn && (
+              <div className="text-[10px] text-text-muted">
+                Entrance animations are disabled while karaoke is on.
+              </div>
+            )}
+            {entrance !== 'none' && !karaokeOn && (
+              <Slider
+                label="Duration"
+                min={5}
+                max={200}
+                step={5}
+                value={Math.round(entranceDur * 100)}
+                unit=" cs"
+                onChange={(v) => set({ entranceDuration: v / 100 })}
+              />
+            )}
+          </>
+        );
+      })()}
+
       <hr className="border-border" />
 
       {/* Image overlays */}
