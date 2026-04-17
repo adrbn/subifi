@@ -559,8 +559,9 @@ export function StylePanel() {
         );
       })()}
 
-      {/* Entrance animation — typewriter / pop / fade. Skipped for karaoke
-          subtitles since they already animate per-word with \k tags. */}
+      {/* Entrance + Exit animations — kept independent so any entrance
+          can pair with any exit (e.g. typewriter-in + fade-out). Skipped
+          for karaoke subtitles since they already animate per-word. */}
       {(() => {
         const entrance = (isTextMode
           ? selectedText!.entrance
@@ -572,6 +573,16 @@ export function StylePanel() {
           : isBlockMode
             ? (blockStyle!.entranceDuration ?? style.entranceDuration)
             : style.entranceDuration) ?? 0.3;
+        const exit = (isTextMode
+          ? selectedText!.exit
+          : isBlockMode
+            ? (blockStyle!.exit ?? style.exit)
+            : style.exit) ?? 'none';
+        const exitDur = (isTextMode
+          ? selectedText!.exitDuration
+          : isBlockMode
+            ? (blockStyle!.exitDuration ?? style.exitDuration)
+            : style.exitDuration) ?? 0.3;
         const karaokeOn = !isTextMode &&
           (isBlockMode
             ? (blockStyle!.karaoke ?? style.karaoke)
@@ -591,17 +602,12 @@ export function StylePanel() {
                 <option value="none">None</option>
                 <option value="typewriter">Typewriter</option>
                 <option value="pop">Pop-in</option>
-                <option value="fade">Fade</option>
+                <option value="fade">Fade in</option>
               </Select>
             </div>
-            {karaokeOn && (
-              <div className="text-[10px] text-text-muted">
-                Entrance animations are disabled while karaoke is on.
-              </div>
-            )}
             {entrance !== 'none' && !karaokeOn && (
               <Slider
-                label="Duration"
+                label="Entrance duration"
                 min={5}
                 max={200}
                 step={5}
@@ -609,6 +615,36 @@ export function StylePanel() {
                 unit=" cs"
                 onChange={(v) => set({ entranceDuration: v / 100 })}
               />
+            )}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-text-muted">Exit</span>
+              <Select
+                className="w-32"
+                value={exit}
+                disabled={karaokeOn}
+                onChange={(e) =>
+                  set({ exit: e.target.value as typeof exit })
+                }
+              >
+                <option value="none">None</option>
+                <option value="fade">Fade out</option>
+              </Select>
+            </div>
+            {exit !== 'none' && !karaokeOn && (
+              <Slider
+                label="Exit duration"
+                min={5}
+                max={200}
+                step={5}
+                value={Math.round(exitDur * 100)}
+                unit=" cs"
+                onChange={(v) => set({ exitDuration: v / 100 })}
+              />
+            )}
+            {karaokeOn && (
+              <div className="text-[10px] text-text-muted">
+                Entrance/exit animations are disabled while karaoke is on.
+              </div>
             )}
           </>
         );

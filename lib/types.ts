@@ -81,6 +81,11 @@ export type Style = {
   // one character at a time. entranceDuration is in seconds.
   entrance: 'none' | 'typewriter' | 'pop' | 'fade';
   entranceDuration: number;
+  // Exit animation applied at block end. Currently only 'fade' (fade-out).
+  // Kept independent from `entrance` so the user can mix any entrance with
+  // any exit (e.g. typewriter-in + fade-out).
+  exit: 'none' | 'fade';
+  exitDuration: number;
 };
 
 export type SegmentationMode = 'cinema' | 'tiktok' | 'word' | 'custom';
@@ -151,6 +156,8 @@ export type TextOverlay = {
   wiggleSpeed?: number;
   entrance?: 'none' | 'typewriter' | 'pop' | 'fade';
   entranceDuration?: number;
+  exit?: 'none' | 'fade';
+  exitDuration?: number;
 };
 
 // A cut is a time range that is REMOVED from the source video at burn time.

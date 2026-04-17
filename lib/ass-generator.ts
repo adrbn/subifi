@@ -89,44 +89,47 @@ function jitterRand(seed: number): number {
 // - 'typewriter': each glyph starts invisible and reveals in sequence. We
 //   return a per-char wrapper; the block-level prefix stays empty.
 type EntranceKind = 'none' | 'typewriter' | 'pop' | 'fade';
-function buildEntrance(
-  kind: EntranceKind,
-  durSec: number,
+type ExitKind = 'none' | 'fade';
+function buildAnimation(
+  entrance: EntranceKind,
+  exit: ExitKind,
+  entranceDurSec: number,
+  exitDurSec: number,
   blockDurSec: number,
 ): { prefix: string; perCharWrap: ((ch: string, i: number, n: number) => string) | null } {
-  const dur = Math.max(0.05, Math.min(3, durSec));
-  if (kind === 'none' || dur <= 0) return { prefix: '', perCharWrap: null };
-  if (kind === 'fade') {
-    // Keep fade-out bounded by the block duration so short blocks don't
-    // over-fade. Subtract one frame of headroom.
-    const outDur = Math.min(dur, Math.max(0.05, blockDurSec - 0.05));
-    const inMs = Math.round(dur * 1000);
-    const outMs = Math.round(outDur * 1000);
-    return { prefix: `{\\fad(${inMs},${outMs})}`, perCharWrap: null };
+  const entDur = Math.max(0.05, Math.min(3, entranceDurSec));
+  const exDur = Math.max(0.05, Math.min(3, exitDurSec));
+
+  let prefix = '';
+  let perCharWrap: ((ch: string, i: number, n: number) => string) | null = null;
+
+  // Combine fade-in (entrance) + fade-out (exit) into a single \fad.
+  // Either side can be 0 if that animation is 'none'.
+  const fadeInMs = entrance === 'fade' ? Math.round(entDur * 1000) : 0;
+  const exitCapped = Math.min(exDur, Math.max(0.05, blockDurSec - 0.05));
+  const fadeOutMs = exit === 'fade' ? Math.round(exitCapped * 1000) : 0;
+  if (fadeInMs > 0 || fadeOutMs > 0) {
+    prefix += `{\\fad(${fadeInMs},${fadeOutMs})}`;
   }
-  if (kind === 'pop') {
-    const peakMs = Math.round(dur * 1000 * 0.7);
-    const endMs = Math.round(dur * 1000);
-    // Start tiny, spring to 115%, settle to 100%.
-    const prefix =
+
+  if (entrance === 'pop') {
+    const peakMs = Math.round(entDur * 1000 * 0.7);
+    const endMs = Math.round(entDur * 1000);
+    prefix +=
       `{\\fscx0\\fscy0` +
       `\\t(0,${peakMs},\\fscx115\\fscy115)` +
       `\\t(${peakMs},${endMs},\\fscx100\\fscy100)}`;
-    return { prefix, perCharWrap: null };
-  }
-  // typewriter: per-char alpha transition. Each char i reveals over a ~60ms
-  // ramp starting at i * step. Earlier chars stay visible because libass
-  // captures override state at each glyph position.
-  const totalMs = Math.round(dur * 1000);
-  return {
-    prefix: '',
-    perCharWrap: (ch, i, n) => {
+  } else if (entrance === 'typewriter') {
+    const totalMs = Math.round(entDur * 1000);
+    perCharWrap = (ch, i, n) => {
       const step = Math.max(1, Math.floor(totalMs / Math.max(1, n)));
       const t0 = i * step;
       const t1 = t0 + Math.min(step + 40, 80);
       return `{\\alpha&HFF&\\t(${t0},${t1},\\alpha&H00&)}${ch}`;
-    },
-  };
+    };
+  }
+
+  return { prefix, perCharWrap };
 }
 
 // Walk the escaped text character by character and invoke `wrap` for each
@@ -457,6 +460,8 @@ export function generateAss({
       wiggleSpeed: t.wiggleSpeed ?? 2,
       entrance: t.entrance ?? 'none',
       entranceDuration: t.entranceDuration ?? 0.3,
+      exit: t.exit ?? 'none',
+      exitDuration: t.exitDuration ?? 0.3,
     };
     const needsDual = t.backgroundOpacity > 0 &&
       (t.backgroundRadius ?? 0) > 0 &&
@@ -552,9 +557,11 @@ export function generateAss({
     // pre-wrapped unit. Skipped when karaoke is active (they both use \t).
     const entrance = merged.entrance ?? 'none';
     const entranceDur = merged.entranceDuration ?? 0.3;
+    const exit = merged.exit ?? 'none';
+    const exitDur = merged.exitDuration ?? 0.3;
     const blockDur = Math.max(0.1, clippedEnd - b.start);
-    if (entrance !== 'none' && !karaokeText) {
-      const ent = buildEntrance(entrance, entranceDur, blockDur);
+    if ((entrance !== 'none' || exit !== 'none') && !karaokeText) {
+      const ent = buildAnimation(entrance, exit, entranceDur, exitDur, blockDur);
       if (ent.perCharWrap) {
         text = mapAssGlyphs(text, ent.perCharWrap);
       }
@@ -626,9 +633,11 @@ export function generateAss({
     }
     const entrance = t.entrance ?? 'none';
     const entranceDur = t.entranceDuration ?? 0.3;
+    const exit = t.exit ?? 'none';
+    const exitDur = t.exitDuration ?? 0.3;
     const overlayDur = Math.max(0.1, t.end - t.start);
-    if (entrance !== 'none') {
-      const ent = buildEntrance(entrance, entranceDur, overlayDur);
+    if (entrance !== 'none' || exit !== 'none') {
+      const ent = buildAnimation(entrance, exit, entranceDur, exitDur, overlayDur);
       if (ent.perCharWrap) {
         text = mapAssGlyphs(text, ent.perCharWrap);
       }

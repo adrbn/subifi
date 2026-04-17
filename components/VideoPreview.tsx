@@ -33,36 +33,43 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-// Return the inline-style fragment that wires a CSS entrance animation to
-// a block/overlay div. The animation plays from the moment the element is
-// mounted (which the caller does when the block becomes active), so the
-// only values we need here are the effect kind, its duration, and (for
-// fade) the total visible duration so the fade-out delay can be computed.
-// 'typewriter' is handled at the glyph level instead — returns {} here.
-function entranceCss(
-  kind: 'none' | 'typewriter' | 'pop' | 'fade' | undefined,
-  durSec: number,
-  blockDurSec: number,
-): React.CSSProperties {
-  const dur = Math.max(0.05, Math.min(3, durSec || 0.3));
-  if (!kind || kind === 'none' || kind === 'typewriter') return {};
-  if (kind === 'pop') {
-    return {
-      animation: `subifi-ent-pop ${dur}s cubic-bezier(0.2, 1.3, 0.4, 1) both`,
-      // willChange smooths out the first frame on low-end GPUs.
-      willChange: 'transform, opacity',
-    };
+// Compute opacity / scale / typewriter progress as a pure function of the
+// video's current time so entrance + exit animations are always in sync
+// with the video (they pause when the video pauses and re-run whenever
+// the layer becomes active again). `elapsedIn` is t - start, `remaining`
+// is end - t. Both entrance and exit apply independently.
+function entranceState(
+  entrance: 'none' | 'typewriter' | 'pop' | 'fade' | undefined,
+  exit: 'none' | 'fade' | undefined,
+  entranceDur: number,
+  exitDur: number,
+  elapsedIn: number,
+  remaining: number,
+): { opacity: number; scale: number; typewriterProgress: number } {
+  const entDur = Math.max(0.05, Math.min(3, entranceDur || 0.3));
+  const exDur = Math.max(0.05, Math.min(3, exitDur || 0.3));
+  let opacity = 1;
+  let scale = 1;
+  let typewriterProgress = 1;
+
+  if (entrance === 'fade') {
+    opacity = Math.min(opacity, clamp01(elapsedIn / entDur));
+  } else if (entrance === 'pop') {
+    const p = clamp01(elapsedIn / entDur);
+    // Overshoot curve: 0→1.15 then settle to 1. Opacity ramps in the
+    // first 10% so the block doesn't flash at full size before scaling.
+    if (p < 0.6) scale = (p / 0.6) * 1.15;
+    else scale = 1.15 - ((p - 0.6) / 0.4) * 0.15;
+    opacity = Math.min(opacity, p < 0.1 ? p * 10 : 1);
+  } else if (entrance === 'typewriter') {
+    typewriterProgress = clamp01(elapsedIn / entDur);
   }
-  // fade — symmetric in/out. Second animation delays so it fires at the
-  // end of the visible range; fill-mode `both` holds opacity 1 during the
-  // delay and 0 after the fade-out completes.
-  const outDelay = Math.max(0, blockDurSec - dur);
-  return {
-    animation:
-      `subifi-ent-fade-in ${dur}s ease-out both, ` +
-      `subifi-ent-fade-out ${dur}s ease-in ${outDelay}s both`,
-    willChange: 'opacity',
-  };
+
+  if (exit === 'fade') {
+    opacity = Math.min(opacity, clamp01(remaining / exDur));
+  }
+
+  return { opacity, scale, typewriterProgress };
 }
 
 // Cheap deterministic pseudo-random in [-1, 1] from an integer seed. We
@@ -86,21 +93,20 @@ function renderEffectedText(
     jitterAmp: number;
     jitterSpeed: number;
     typewriter: boolean;
-    typewriterDurSec: number;
+    typewriterProgress: number; // 0..1 — fraction of chars revealed
+    playing: boolean;
   },
 ): React.ReactNode {
-  const { jitter, jitterAmp, jitterSpeed, typewriter, typewriterDurSec } = opts;
+  const { jitter, jitterAmp, jitterSpeed, typewriter, typewriterProgress, playing } = opts;
   if (!jitter && !typewriter) return text;
 
   const jitterDurMs = Math.max(120, Math.round(1000 / Math.max(0.1, jitterSpeed)));
   const ampPx = jitterAmp * scale * 0.6;
   const lines = text.split('\n');
-  // Total glyph count drives typewriter pacing so the reveal finishes at
-  // entranceDuration regardless of text length.
   const totalGlyphs = lines.reduce((s, l) => s + Array.from(l).length, 0);
-  const stepMs = typewriter && totalGlyphs > 0
-    ? Math.max(10, (typewriterDurSec * 1000) / totalGlyphs)
-    : 0;
+  const revealedCount = typewriter
+    ? Math.floor(clamp01(typewriterProgress) * totalGlyphs)
+    : totalGlyphs;
 
   const nodes: React.ReactNode[] = [];
   let idx = 0;
@@ -108,17 +114,15 @@ function renderEffectedText(
     const chars = Array.from(line);
     chars.forEach((ch, ci) => {
       const s = idx + 1;
-      const anims: string[] = [];
       const cssVars: Record<string, string> = {};
+      let animation: string | undefined;
 
       if (jitter) {
         const xs = [jitterRand(s), jitterRand(s + 101), jitterRand(s + 211)];
         const ys = [jitterRand(s + 307), jitterRand(s + 409), jitterRand(s + 521)];
         const rs = [jitterRand(s + 617), jitterRand(s + 719), jitterRand(s + 823)];
         const jDelay = ((idx * 53) % jitterDurMs) - jitterDurMs;
-        anims.push(
-          `subifi-jitter ${jitterDurMs}ms steps(1, end) ${jDelay}ms infinite`,
-        );
+        animation = `subifi-jitter ${jitterDurMs}ms steps(1, end) ${jDelay}ms infinite`;
         cssVars['--jx0'] = `${(xs[0] * ampPx).toFixed(2)}px`;
         cssVars['--jy0'] = `${(ys[0] * ampPx).toFixed(2)}px`;
         cssVars['--jr0'] = `${(rs[0] * jitterAmp).toFixed(2)}deg`;
@@ -130,12 +134,10 @@ function renderEffectedText(
         cssVars['--jr2'] = `${(rs[2] * jitterAmp).toFixed(2)}deg`;
       }
 
-      if (typewriter) {
-        const tDelay = idx * stepMs;
-        // step-end + 1ms duration = hard pop-in at delay boundary (classic
-        // typewriter feel). `both` fill holds opacity 0 during the delay.
-        anims.push(`subifi-ent-char-reveal 1ms step-end ${tDelay}ms both`);
-      }
+      // Typewriter: hidden chars keep their layout slot (opacity 0) so the
+      // text block doesn't shift left/right as chars appear. Matches the
+      // centered-alignment case cleanly.
+      const hiddenByType = typewriter && idx >= revealedCount;
 
       nodes.push(
         <span
@@ -143,7 +145,9 @@ function renderEffectedText(
           style={{
             display: 'inline-block',
             whiteSpace: 'pre',
-            animation: anims.join(', '),
+            animation,
+            animationPlayState: playing ? 'running' : 'paused',
+            opacity: hiddenByType ? 0 : 1,
             ...cssVars,
           } as React.CSSProperties}
         >
@@ -391,6 +395,7 @@ export function VideoPreview() {
     subtitleTracks,
   } = useEditor();
   const [t, setT] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [scale, setScale] = useState(1);
   const [subtitleDragging, setSubtitleDragging] = useState(false);
   const [draggingOverlayId, setDraggingOverlayId] = useState<string | null>(
@@ -572,6 +577,45 @@ export function VideoPreview() {
     },
     [updateTextOverlay],
   );
+
+  // --- 60fps time tick driven off the video element -------------------------
+  // timeupdate fires only ~4×/s which is far too coarse for entrance/exit
+  // animations tied to video time. We run a rAF loop while the video is
+  // playing, reading currentTime directly so animations stay in sync and
+  // freeze precisely when the user pauses.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onSeeked = () => {
+      setT(v.currentTime);
+      setCurrentTime(v.currentTime);
+    };
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('seeked', onSeeked);
+    return () => {
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('seeked', onSeeked);
+    };
+  }, [setCurrentTime]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf = 0;
+    const tick = () => {
+      const v = videoRef.current;
+      if (v) {
+        setT(v.currentTime);
+        setCurrentTime(v.currentTime);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying, setCurrentTime]);
 
   // --- Expose video element to SubtitleList for scrubbing -------------------
   useEffect(() => {
@@ -793,13 +837,16 @@ export function VideoPreview() {
         {(textOverlaysVisible ? textOverlays : [])
           .filter((ov) => t >= ov.start - 0.001 && t <= ov.end + 0.001)
           .map((ov) => {
-            const entCss =
+            const est =
               editingTextOverlayId === ov.id
-                ? {}
-                : entranceCss(
+                ? { opacity: 1, scale: 1, typewriterProgress: 1 }
+                : entranceState(
                     ov.entrance,
+                    ov.exit,
                     ov.entranceDuration ?? 0.3,
-                    Math.max(0.1, ov.end - ov.start),
+                    ov.exitDuration ?? 0.3,
+                    t - ov.start,
+                    ov.end - t,
                   );
             const base = textOverlayStyle(
               ov,
@@ -807,7 +854,11 @@ export function VideoPreview() {
               selectedTextOverlayId === ov.id,
               draggingTextOverlayId === ov.id,
             );
-            const styled: React.CSSProperties = { ...base, ...entCss };
+            const styled: React.CSSProperties = {
+              ...base,
+              opacity: est.opacity,
+              transform: `translate(-50%, -50%) scale(${est.scale})`,
+            };
             return (
             <div
               key={ov.id}
@@ -848,7 +899,8 @@ export function VideoPreview() {
                   jitterAmp: ov.wiggleAmplitude ?? 6,
                   jitterSpeed: ov.wiggleSpeed ?? 2,
                   typewriter: ov.entrance === 'typewriter',
-                  typewriterDurSec: ov.entranceDuration ?? 0.3,
+                  typewriterProgress: est.typewriterProgress,
+                  playing: isPlaying,
                 })
               )}
             </div>
@@ -910,23 +962,27 @@ export function VideoPreview() {
             scale,
             subtitleDragging,
           );
-          // Entrance animation — pure CSS, runs off the element mount so it
-          // doesn't depend on React's timeupdate-driven re-render cadence.
-          // Skipped while editing so the textarea doesn't fade/pop under
-          // the user's cursor.
-          const entCss = isEditing
-            ? {}
-            : entranceCss(
+          // Entrance/exit — computed from video time so the animation
+          // replays every time the block becomes active and pauses when
+          // the video pauses. Skipped while editing so the textarea
+          // doesn't fade/pop under the user's cursor.
+          const est = isEditing
+            ? { opacity: 1, scale: 1, typewriterProgress: 1 }
+            : entranceState(
                 effectiveStyle.entrance,
+                effectiveStyle.exit,
                 effectiveStyle.entranceDuration ?? 0.3,
-                Math.max(0.1, blk.end - blk.start),
+                effectiveStyle.exitDuration ?? 0.3,
+                t - blk.start,
+                blk.end - t,
               );
           const styled: React.CSSProperties = {
             ...baseStyle,
             ...(isSelected
               ? { outline: '2px dashed #60a5fa', outlineOffset: 4 }
               : {}),
-            ...entCss,
+            opacity: est.opacity,
+            transform: `translate(-50%, -50%) scale(${est.scale})`,
           };
           return (
             <div
@@ -998,7 +1054,8 @@ export function VideoPreview() {
                   jitterAmp: effectiveStyle.wiggleAmplitude ?? 6,
                   jitterSpeed: effectiveStyle.wiggleSpeed ?? 2,
                   typewriter: effectiveStyle.entrance === 'typewriter',
-                  typewriterDurSec: effectiveStyle.entranceDuration ?? 0.3,
+                  typewriterProgress: est.typewriterProgress,
+                  playing: isPlaying,
                 })
               )}
             </div>

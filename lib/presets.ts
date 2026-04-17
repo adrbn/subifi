@@ -38,6 +38,8 @@ const baseStyle: Style = {
   wiggleSpeed: 2,
   entrance: 'none',
   entranceDuration: 0.3,
+  exit: 'none',
+  exitDuration: 0.3,
 };
 
 export const STYLE_PRESETS: StylePreset[] = [
