@@ -33,36 +33,36 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-// Compute entrance-animation state for a block or overlay at the current
-// playhead. Returns opacity (for fade), a scale multiplier (for pop), and
-// `revealChars` — the number of visible leading characters for typewriter
-// (Infinity when the effect is not typewriter). Callers multiply / slice
-// accordingly before handing text to the renderer.
-function entranceState(
+// Return the inline-style fragment that wires a CSS entrance animation to
+// a block/overlay div. The animation plays from the moment the element is
+// mounted (which the caller does when the block becomes active), so the
+// only values we need here are the effect kind, its duration, and (for
+// fade) the total visible duration so the fade-out delay can be computed.
+// 'typewriter' is handled at the glyph level instead — returns {} here.
+function entranceCss(
   kind: 'none' | 'typewriter' | 'pop' | 'fade' | undefined,
   durSec: number,
-  t: number,
-  start: number,
-  end: number,
-): { opacity: number; scale: number; revealChars: number } {
+  blockDurSec: number,
+): React.CSSProperties {
   const dur = Math.max(0.05, Math.min(3, durSec || 0.3));
-  const inProg = clamp01((t - start) / dur);
-  if (!kind || kind === 'none' || t < start) {
-    return { opacity: 1, scale: 1, revealChars: Infinity };
-  }
-  if (kind === 'fade') {
-    const outProg = clamp01((end - t) / dur);
-    return { opacity: Math.min(inProg, outProg), scale: 1, revealChars: Infinity };
-  }
+  if (!kind || kind === 'none' || kind === 'typewriter') return {};
   if (kind === 'pop') {
-    // 0 → 1.15 at 70% of duration, then 1.15 → 1.0 by duration end.
-    let s: number;
-    if (inProg < 0.7) s = (inProg / 0.7) * 1.15;
-    else s = 1.15 - ((inProg - 0.7) / 0.3) * 0.15;
-    return { opacity: 1, scale: s, revealChars: Infinity };
+    return {
+      animation: `subifi-ent-pop ${dur}s cubic-bezier(0.2, 1.3, 0.4, 1) both`,
+      // willChange smooths out the first frame on low-end GPUs.
+      willChange: 'transform, opacity',
+    };
   }
-  // typewriter
-  return { opacity: 1, scale: 1, revealChars: inProg }; // caller scales to text length
+  // fade — symmetric in/out. Second animation delays so it fires at the
+  // end of the visible range; fill-mode `both` holds opacity 1 during the
+  // delay and 0 after the fade-out completes.
+  const outDelay = Math.max(0, blockDurSec - dur);
+  return {
+    animation:
+      `subifi-ent-fade-in ${dur}s ease-out both, ` +
+      `subifi-ent-fade-out ${dur}s ease-in ${outDelay}s both`,
+    willChange: 'opacity',
+  };
 }
 
 // Cheap deterministic pseudo-random in [-1, 1] from an integer seed. We
@@ -73,47 +73,78 @@ function jitterRand(seed: number): number {
   return (x - Math.floor(x)) * 2 - 1;
 }
 
-// Render text with a per-character JITTER (a.k.a. "boil") animation. Each
-// glyph snaps between three randomised offsets using `steps(1)` timing, so
-// the motion is choppy — mimicking hand-drawn 2D animation where redrawn
-// lines never land in exactly the same place. Spaces and newlines are
-// preserved. Per-letter seeded randomness means no flicker across renders.
-function renderJitterText(
+// Render text with any combination of per-character effects (jitter and/or
+// typewriter reveal). Spaces and newlines are preserved. Both effects are
+// pure CSS animations driven off the element's mount — no React re-render
+// loop — so they run at monitor refresh rate. When neither effect is on,
+// returns the plain string so React skips span overhead entirely.
+function renderEffectedText(
   text: string,
-  amplitude: number,
-  speed: number,
   scale: number,
+  opts: {
+    jitter: boolean;
+    jitterAmp: number;
+    jitterSpeed: number;
+    typewriter: boolean;
+    typewriterDurSec: number;
+  },
 ): React.ReactNode {
-  const durationMs = Math.max(120, Math.round(1000 / Math.max(0.1, speed)));
-  const ampPx = amplitude * scale * 0.6;
+  const { jitter, jitterAmp, jitterSpeed, typewriter, typewriterDurSec } = opts;
+  if (!jitter && !typewriter) return text;
+
+  const jitterDurMs = Math.max(120, Math.round(1000 / Math.max(0.1, jitterSpeed)));
+  const ampPx = jitterAmp * scale * 0.6;
   const lines = text.split('\n');
+  // Total glyph count drives typewriter pacing so the reveal finishes at
+  // entranceDuration regardless of text length.
+  const totalGlyphs = lines.reduce((s, l) => s + Array.from(l).length, 0);
+  const stepMs = typewriter && totalGlyphs > 0
+    ? Math.max(10, (typewriterDurSec * 1000) / totalGlyphs)
+    : 0;
+
   const nodes: React.ReactNode[] = [];
   let idx = 0;
   lines.forEach((line, li) => {
     const chars = Array.from(line);
     chars.forEach((ch, ci) => {
       const s = idx + 1;
-      const xs = [jitterRand(s), jitterRand(s + 101), jitterRand(s + 211)];
-      const ys = [jitterRand(s + 307), jitterRand(s + 409), jitterRand(s + 521)];
-      const rs = [jitterRand(s + 617), jitterRand(s + 719), jitterRand(s + 823)];
-      const delay = ((idx * 53) % durationMs) - durationMs;
+      const anims: string[] = [];
+      const cssVars: Record<string, string> = {};
+
+      if (jitter) {
+        const xs = [jitterRand(s), jitterRand(s + 101), jitterRand(s + 211)];
+        const ys = [jitterRand(s + 307), jitterRand(s + 409), jitterRand(s + 521)];
+        const rs = [jitterRand(s + 617), jitterRand(s + 719), jitterRand(s + 823)];
+        const jDelay = ((idx * 53) % jitterDurMs) - jitterDurMs;
+        anims.push(
+          `subifi-jitter ${jitterDurMs}ms steps(1, end) ${jDelay}ms infinite`,
+        );
+        cssVars['--jx0'] = `${(xs[0] * ampPx).toFixed(2)}px`;
+        cssVars['--jy0'] = `${(ys[0] * ampPx).toFixed(2)}px`;
+        cssVars['--jr0'] = `${(rs[0] * jitterAmp).toFixed(2)}deg`;
+        cssVars['--jx1'] = `${(xs[1] * ampPx).toFixed(2)}px`;
+        cssVars['--jy1'] = `${(ys[1] * ampPx).toFixed(2)}px`;
+        cssVars['--jr1'] = `${(rs[1] * jitterAmp).toFixed(2)}deg`;
+        cssVars['--jx2'] = `${(xs[2] * ampPx).toFixed(2)}px`;
+        cssVars['--jy2'] = `${(ys[2] * ampPx).toFixed(2)}px`;
+        cssVars['--jr2'] = `${(rs[2] * jitterAmp).toFixed(2)}deg`;
+      }
+
+      if (typewriter) {
+        const tDelay = idx * stepMs;
+        // step-end + 1ms duration = hard pop-in at delay boundary (classic
+        // typewriter feel). `both` fill holds opacity 0 during the delay.
+        anims.push(`subifi-ent-char-reveal 1ms step-end ${tDelay}ms both`);
+      }
+
       nodes.push(
         <span
           key={`${li}-${ci}`}
           style={{
             display: 'inline-block',
             whiteSpace: 'pre',
-            animation: `subifi-jitter ${durationMs}ms steps(1, end) infinite`,
-            animationDelay: `${delay}ms`,
-            ['--jx0' as string]: `${(xs[0] * ampPx).toFixed(2)}px`,
-            ['--jy0' as string]: `${(ys[0] * ampPx).toFixed(2)}px`,
-            ['--jr0' as string]: `${(rs[0] * amplitude).toFixed(2)}deg`,
-            ['--jx1' as string]: `${(xs[1] * ampPx).toFixed(2)}px`,
-            ['--jy1' as string]: `${(ys[1] * ampPx).toFixed(2)}px`,
-            ['--jr1' as string]: `${(rs[1] * amplitude).toFixed(2)}deg`,
-            ['--jx2' as string]: `${(xs[2] * ampPx).toFixed(2)}px`,
-            ['--jy2' as string]: `${(ys[2] * ampPx).toFixed(2)}px`,
-            ['--jr2' as string]: `${(rs[2] * amplitude).toFixed(2)}deg`,
+            animation: anims.join(', '),
+            ...cssVars,
           } as React.CSSProperties}
         >
           {ch}
@@ -762,21 +793,21 @@ export function VideoPreview() {
         {(textOverlaysVisible ? textOverlays : [])
           .filter((ov) => t >= ov.start - 0.001 && t <= ov.end + 0.001)
           .map((ov) => {
-            const ent =
+            const entCss =
               editingTextOverlayId === ov.id
-                ? { opacity: 1, scale: 1, revealChars: Infinity }
-                : entranceState(ov.entrance, ov.entranceDuration ?? 0.3, t, ov.start, ov.end);
+                ? {}
+                : entranceCss(
+                    ov.entrance,
+                    ov.entranceDuration ?? 0.3,
+                    Math.max(0.1, ov.end - ov.start),
+                  );
             const base = textOverlayStyle(
               ov,
               scale,
               selectedTextOverlayId === ov.id,
               draggingTextOverlayId === ov.id,
             );
-            const styled: React.CSSProperties = {
-              ...base,
-              opacity: ent.opacity,
-              transform: `translate(-50%, -50%) scale(${ent.scale})`,
-            };
+            const styled: React.CSSProperties = { ...base, ...entCss };
             return (
             <div
               key={ov.id}
@@ -811,26 +842,15 @@ export function VideoPreview() {
                     minWidth: 80,
                   }}
                 />
-              ) : (() => {
-                const typewriter = ov.entrance === 'typewriter';
-                const total = Array.from(ov.text).length;
-                const shown = typewriter
-                  ? Math.min(total, Math.floor(ent.revealChars * total))
-                  : total;
-                const visibleText = typewriter
-                  ? Array.from(ov.text).slice(0, shown).join('')
-                  : ov.text;
-                return ov.wiggle ? (
-                  renderJitterText(
-                    visibleText,
-                    ov.wiggleAmplitude ?? 6,
-                    ov.wiggleSpeed ?? 2,
-                    scale,
-                  )
-                ) : (
-                  visibleText
-                );
-              })()}
+              ) : (
+                renderEffectedText(ov.text, scale, {
+                  jitter: !!ov.wiggle,
+                  jitterAmp: ov.wiggleAmplitude ?? 6,
+                  jitterSpeed: ov.wiggleSpeed ?? 2,
+                  typewriter: ov.entrance === 'typewriter',
+                  typewriterDurSec: ov.entranceDuration ?? 0.3,
+                })
+              )}
             </div>
             );
           })}
@@ -890,25 +910,23 @@ export function VideoPreview() {
             scale,
             subtitleDragging,
           );
-          // Entrance animation — skipped while editing so the textarea stays
-          // responsive. Typewriter reveal uses the progress 0..1 to slice
-          // text; fade/pop modify opacity/scale of the whole block.
-          const ent = isEditing
-            ? { opacity: 1, scale: 1, revealChars: Infinity }
-            : entranceState(
+          // Entrance animation — pure CSS, runs off the element mount so it
+          // doesn't depend on React's timeupdate-driven re-render cadence.
+          // Skipped while editing so the textarea doesn't fade/pop under
+          // the user's cursor.
+          const entCss = isEditing
+            ? {}
+            : entranceCss(
                 effectiveStyle.entrance,
                 effectiveStyle.entranceDuration ?? 0.3,
-                t,
-                blk.start,
-                blk.end,
+                Math.max(0.1, blk.end - blk.start),
               );
           const styled: React.CSSProperties = {
             ...baseStyle,
             ...(isSelected
               ? { outline: '2px dashed #60a5fa', outlineOffset: 4 }
               : {}),
-            opacity: ent.opacity,
-            transform: `translate(-50%, -50%) scale(${ent.scale})`,
+            ...entCss,
           };
           return (
             <div
@@ -974,29 +992,15 @@ export function VideoPreview() {
                     </span>
                   );
                 })
-              ) : (() => {
-                // Typewriter reveal: slice text to the current progress.
-                // Spaces and newlines count as characters so timing stays
-                // predictable; the blank trailing chars simply take no ink.
-                const typewriter = effectiveStyle.entrance === 'typewriter';
-                const total = Array.from(blk.text).length;
-                const shown = typewriter
-                  ? Math.min(total, Math.floor(ent.revealChars * total))
-                  : total;
-                const visibleText = typewriter
-                  ? Array.from(blk.text).slice(0, shown).join('')
-                  : blk.text;
-                return effectiveStyle.wiggle ? (
-                  renderJitterText(
-                    visibleText,
-                    effectiveStyle.wiggleAmplitude ?? 6,
-                    effectiveStyle.wiggleSpeed ?? 2,
-                    scale,
-                  )
-                ) : (
-                  visibleText
-                );
-              })()}
+              ) : (
+                renderEffectedText(blk.text, scale, {
+                  jitter: !!effectiveStyle.wiggle,
+                  jitterAmp: effectiveStyle.wiggleAmplitude ?? 6,
+                  jitterSpeed: effectiveStyle.wiggleSpeed ?? 2,
+                  typewriter: effectiveStyle.entrance === 'typewriter',
+                  typewriterDurSec: effectiveStyle.entranceDuration ?? 0.3,
+                })
+              )}
             </div>
           );
         })}

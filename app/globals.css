@@ -82,3 +82,23 @@ input[type="color"]::-webkit-color-swatch { border: 2px solid #3a3a50; border-ra
   66%  { transform: translate(var(--jx2, 0), var(--jy2, 0)) rotate(var(--jr2, 0deg)); }
   100% { transform: translate(var(--jx0, 0), var(--jy0, 0)) rotate(var(--jr0, 0deg)); }
 }
+
+/* Entrance animations — CSS-driven so they run at monitor refresh rate
+   instead of piggy-backing on React re-renders (which only fire when the
+   <video> dispatches timeupdate, typically 4×/s). The block/overlay div
+   is mounted when its time range becomes active; the animation plays once
+   from that moment with `animation-fill-mode: both` to hold the final
+   state. All keyframes preserve the base `translate(-50%, -50%)` anchor
+   that the positioning style already applies. */
+@keyframes subifi-ent-pop {
+  0%   { transform: translate(-50%, -50%) scale(0);   opacity: 0; }
+  60%  { transform: translate(-50%, -50%) scale(1.15); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1);    opacity: 1; }
+}
+@keyframes subifi-ent-fade-in  { from { opacity: 0 } to { opacity: 1 } }
+@keyframes subifi-ent-fade-out { from { opacity: 1 } to { opacity: 0 } }
+
+/* Per-character reveal used by the typewriter entrance. Each char span
+   gets its own animation-delay so the reveal cascades left-to-right
+   without any per-frame React work. */
+@keyframes subifi-ent-char-reveal { from { opacity: 0 } to { opacity: 1 } }
