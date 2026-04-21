@@ -3,7 +3,15 @@
 import { useRef, useState } from 'react';
 import { useEditor } from '@/lib/store';
 import { Button } from './ui/button';
-import { toJson, toSrt, toTxt, toVtt } from '@/lib/subtitle-formats';
+import {
+  fromSrtWithDiagnostics,
+  fromVttWithDiagnostics,
+  toJson,
+  toSrt,
+  toTxt,
+  toVtt,
+  type SubtitleDiagnostic,
+} from '@/lib/subtitle-formats';
 import { downloadBlob } from '@/lib/download';
 import {
   exportProject,
@@ -17,6 +25,13 @@ import { captureCoverFrame } from '@/lib/cover-frame';
 import { resetFFmpeg } from '@/lib/ffmpeg-client';
 import { extractAudio } from '@/lib/audio-extract';
 import { ProjectImportModal } from './ProjectImportModal';
+import { SrtImportErrorModal } from './SrtImportErrorModal';
+
+// Filename extension probes used by the Import button. Kept case-insensitive
+// because downloaded files from different platforms mix casing.
+const SRT_EXT = /\.srt$/i;
+const VTT_EXT = /\.vtt$/i;
+const JSON_EXT = /\.(json|subifi\.json)$/i;
 
 export function ExportBar() {
   const {
@@ -39,6 +54,7 @@ export function ExportBar() {
     setExtractedAudio,
     setStatus,
     setProgress,
+    setBlocks,
     importProject,
   } = useEditor();
 
@@ -49,6 +65,12 @@ export function ExportBar() {
   // stash the parsed project here and pop a modal asking the user to
   // drop the source video file.
   const [pendingProject, setPendingProject] = useState<ProjectFile | null>(null);
+  // SRT/VTT import failure state — drives the recovery modal.
+  const [srtError, setSrtError] = useState<{
+    diagnostic: SubtitleDiagnostic;
+    fileName: string;
+    originalText: string;
+  } | null>(null);
 
   // Load a File into the editor as if it had been dropped on the Dropzone:
   // probe metadata, set it as the active video, kick off audio extraction,
@@ -93,13 +115,65 @@ export function ExportBar() {
     }
   };
 
+  // Subtitle-only import: parse an SRT or VTT file and replace the current
+  // blocks. Uses the diagnostic parser so we can pop the recovery modal on
+  // malformed input instead of silently failing.
+  const onImportSubtitles = async (file: File) => {
+    const isSrt = SRT_EXT.test(file.name);
+    let text: string;
+    try {
+      text = await file.text();
+    } catch (err) {
+      setStatus(
+        'error',
+        err instanceof Error ? err.message : 'Could not read subtitle file',
+      );
+      return;
+    }
+    const diagnostic = isSrt
+      ? fromSrtWithDiagnostics(text)
+      : fromVttWithDiagnostics(text);
+    if (!diagnostic.ok) {
+      // Stash the failure — the modal renders the diagnostic + recovery UI.
+      setSrtError({
+        diagnostic,
+        fileName: file.name,
+        originalText: text,
+      });
+      return;
+    }
+    setBlocks(diagnostic.blocks);
+    setStatus('ready', null);
+  };
+
+  // Router: the Import button accepts BOTH project JSON and subtitle
+  // files. Dispatch by extension so each format gets its own parsing and
+  // error-recovery path.
+  const onImport = async (file: File) => {
+    if (SRT_EXT.test(file.name) || VTT_EXT.test(file.name)) {
+      await onImportSubtitles(file);
+      return;
+    }
+    // Fall through to project import for JSON (and any other file — the
+    // project parser will produce a clear error for non-project JSON).
+    await onImportProject(file);
+  };
+
   const onImportProject = async (file: File) => {
     let project: ProjectFile;
     try {
       const json = await file.text();
       project = parseProjectFile(json);
     } catch (err) {
-      alert(`Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`);
+      // Non-JSON or malformed project. If the extension wasn't .json give
+      // a more targeted hint than the raw parser message.
+      const looksLikeProject = JSON_EXT.test(file.name);
+      const base = err instanceof Error ? err.message : 'Invalid file';
+      alert(
+        looksLikeProject
+          ? `Import failed: ${base}`
+          : `Import failed: ${base}\n\nTip: the Import button accepts .srt, .vtt, or .subifi.json files.`,
+      );
       return;
     }
     // Apply edits/state immediately — the user sees their project come
@@ -260,17 +334,21 @@ export function ExportBar() {
         size="sm"
         className="shrink-0"
         onClick={() => projectInputRef.current?.click()}
+        title="Import .srt, .vtt, or a .subifi.json project"
       >
         Import
       </Button>
       <input
         ref={projectInputRef}
         type="file"
-        accept=".json,.subifi.json"
+        // Accept subtitle formats alongside project JSON so the single
+        // Import button works whether the user is bringing in cues from
+        // an external tool (SRT/VTT) or restoring a full SubIFI project.
+        accept=".srt,.vtt,text/vtt,.json,.subifi.json,application/json"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) void onImportProject(file);
+          if (file) void onImport(file);
           e.target.value = '';
         }}
       />
@@ -279,6 +357,14 @@ export function ExportBar() {
         onPick={(f) => void onPendingVideoPicked(f)}
         onClose={() => setPendingProject(null)}
       />
+      {srtError && (
+        <SrtImportErrorModal
+          diagnostic={srtError.diagnostic}
+          fileName={srtError.fileName}
+          originalText={srtError.originalText}
+          onClose={() => setSrtError(null)}
+        />
+      )}
     </div>
   );
 }
