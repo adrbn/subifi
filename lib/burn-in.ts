@@ -290,7 +290,15 @@ function buildOverlayComplex(
   videoSource: string,
   videoDuration: number,
 ): string {
-  const parts: string[] = [`${videoSource}${subsFilter}[v0]`];
+  // When subsFilter is empty (no subs and no downscale) we still need a
+  // filter node between the source label and [v0], otherwise ffmpeg parses
+  // `[0:v][v0]` as "map 0:v to v0 with no filter" which is invalid. `null`
+  // is the canonical passthrough video filter.
+  const firstNode =
+    subsFilter.length > 0
+      ? `${videoSource}${subsFilter}[v0]`
+      : `${videoSource}null[v0]`;
+  const parts: string[] = [firstNode];
   overlays.forEach((ov, i) => {
     const inputIdx = i + 1;
     const alpha = Math.max(0, Math.min(1, ov.opacity));
@@ -641,6 +649,13 @@ async function burnSubtitlesCore(
     ? remapImageOverlays(overlays, cuts, videoDuration)
     : overlays;
 
+  // Does the pipeline need ANY subtitle rendering? When false we skip
+  // font loading, ASS generation, and the `subtitles=` filter entirely —
+  // this lets users export a "clean" video (no subs burned in) for
+  // reference or sharing.
+  const hasSubs =
+    effectiveBlocks.length > 0 || effectiveTextOverlays.length > 0;
+
   // Diagnostic dump — surfaced via console.debug so it's there when the
   // user complains "subtitles not burned" but doesn't drown the console
   // in normal operation. Includes ALL the things that historically went
@@ -670,13 +685,21 @@ async function burnSubtitlesCore(
     // chose (e.g. "Inter Variable" vs "Inter"), subtitles render invisible.
     // We build a fontNameMap: displayName → internalName, then pass the
     // remapped names to generateAss so the ASS Style lines always match.
+    //
+    // The entire font-fetching pass is gated on `hasSubs` — when the user
+    // exports with no subtitles, we have nothing to render with them and
+    // the network round-trips for Google Fonts are pure waste. `fontNameMap`
+    // and the fallback map stay in scope (empty) so the remap() helper
+    // below still works without a special-case.
+    const fontNameMap = new Map<string, string>();
+    const fallbackFonts = new Map<string, string>();
+    if (hasSubs) {
     try {
       await ff.createDir(fontsDir);
     } catch {
       // may already exist
     }
 
-    const fontNameMap = new Map<string, string>();
     let fontsWritten = 0;
 
     // Custom user-uploaded fonts.
@@ -772,9 +795,9 @@ async function burnSubtitlesCore(
       effectiveBlocks.map((b) => b.text).join('') +
       effectiveTextOverlays.map((t) => t.text).join('');
     const fallbackSpecs = detectNeededFallbacks(allText, style.fontWeight);
-    // Maps script regex → internal font family name so generateAss can
-    // wrap character runs with {\fn<name>} overrides.
-    const fallbackFonts = new Map<string, string>();
+    // `fallbackFonts` (declared above) maps script key → internal font
+    // family name so generateAss can wrap character runs with {\fn<name>}
+    // overrides.
     for (const spec of fallbackSpecs) {
       const key = `${spec.family}@${spec.weight}`;
       if (seen.has(key)) continue;
@@ -810,6 +833,11 @@ async function burnSubtitlesCore(
           'upload it as a custom font, then try again.',
       );
     }
+    } else {
+      console.debug(
+        '[burn] hasSubs=false — skipping font loading, ASS generation, and subtitles= filter',
+      );
+    }
 
     // --- Measure text for rounded-rect clip paths ---
     // Canvas measurement uses the browser-loaded fonts (same as preview).
@@ -822,53 +850,66 @@ async function burnSubtitlesCore(
     });
 
     // --- Generate the ASS file with remapped font names ---
+    // `hasSubs` was computed above (before the try block) so we can also
+    // skip font loading when no subtitles are being burned. libass's
+    // `subtitles=` filter can't accept an empty source, so we conditionally
+    // drop it and the ASS generation below.
     const remap = (name: string) => fontNameMap.get(name) ?? name;
-    const remappedBlocks = effectiveBlocks.map((b) => {
-      if (!b.styleOverride?.fontFamily) return b;
-      return {
-        ...b,
-        styleOverride: {
-          ...b.styleOverride,
-          fontFamily: remap(b.styleOverride.fontFamily),
-        },
-      };
-    });
-    const assContent = generateAss({
-      blocks: remappedBlocks,
-      style: { ...style, fontFamily: remap(style.fontFamily) },
-      videoWidth,
-      videoHeight,
-      textOverlays: effectiveTextOverlays.map((t) => ({
-        ...t,
-        fontFamily: remap(t.fontFamily),
-      })),
-      fallbackFonts: Object.fromEntries(fallbackFonts),
-      blockMetrics,
-      textOverlayMetrics,
-      // Note: embeddedFonts intentionally omitted — the [Fonts] section
-      // triggers an assertion crash in ffmpeg-wasm's libass build. fontsdir
-      // alone works (confirmed by "Loading font file" in libass stderr).
-    });
-    const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
-    // Show enough of the ASS to verify Style lines + first Dialogues.
-    const styleLines = assContent.split('\n').filter(l => l.startsWith('Style:'));
-    const firstDialogues = assContent.split('\n').filter(l => l.startsWith('Dialogue:')).slice(0, 4);
-    console.debug('[burn] ass file generated', {
-      bytes: assContent.length,
-      dialogueLines: dialogueCount,
-      playRes: `${videoWidth}x${videoHeight}`,
-      fontSize: style.fontSize,
-      styles: styleLines,
-      sampleDialogues: firstDialogues,
-    });
-    if (dialogueCount === 0) {
-      throw new Error(
-        'Nothing to burn: the generated subtitle file has no Dialogue lines. ' +
-          'This usually means all subtitle blocks were removed by cuts, or the ' +
-          'block list is empty. Add subtitles or remove the cuts and try again.',
+    if (hasSubs) {
+      const remappedBlocks = effectiveBlocks.map((b) => {
+        if (!b.styleOverride?.fontFamily) return b;
+        return {
+          ...b,
+          styleOverride: {
+            ...b.styleOverride,
+            fontFamily: remap(b.styleOverride.fontFamily),
+          },
+        };
+      });
+      const assContent = generateAss({
+        blocks: remappedBlocks,
+        style: { ...style, fontFamily: remap(style.fontFamily) },
+        videoWidth,
+        videoHeight,
+        textOverlays: effectiveTextOverlays.map((t) => ({
+          ...t,
+          fontFamily: remap(t.fontFamily),
+        })),
+        fallbackFonts: Object.fromEntries(fallbackFonts),
+        blockMetrics,
+        textOverlayMetrics,
+        // Note: embeddedFonts intentionally omitted — the [Fonts] section
+        // triggers an assertion crash in ffmpeg-wasm's libass build.
+        // fontsdir alone works (confirmed by "Loading font file" in
+        // libass stderr).
+      });
+      const dialogueCount = (assContent.match(/^Dialogue:/gm) ?? []).length;
+      const styleLines = assContent.split('\n').filter(l => l.startsWith('Style:'));
+      const firstDialogues = assContent
+        .split('\n')
+        .filter((l) => l.startsWith('Dialogue:'))
+        .slice(0, 4);
+      console.debug('[burn] ass file generated', {
+        bytes: assContent.length,
+        dialogueLines: dialogueCount,
+        playRes: `${videoWidth}x${videoHeight}`,
+        fontSize: style.fontSize,
+        styles: styleLines,
+        sampleDialogues: firstDialogues,
+      });
+      if (dialogueCount === 0) {
+        throw new Error(
+          'Nothing to burn: the generated subtitle file has no Dialogue lines. ' +
+            'This usually means all subtitle blocks were removed by cuts, or the ' +
+            'block list is empty. Add subtitles or remove the cuts and try again.',
+        );
+      }
+      await ff.writeFile(subsName, new TextEncoder().encode(assContent));
+    } else {
+      console.debug(
+        '[burn] no subtitle blocks or text overlays — skipping ASS generation',
       );
     }
-    await ff.writeFile(subsName, new TextEncoder().encode(assContent));
 
     // Auto-cap export resolution to 1080p on the short side. Computed
     // BEFORE overlays so we pre-scale overlay images to the effective
@@ -887,10 +928,20 @@ async function burnSubtitlesCore(
     // PlayRes matches exactly — no rounding or font-metric drift. The
     // scale filter comes AFTER subtitles. Overlays are applied after the
     // scale and are pre-scaled to the effective dimensions.
-    const scaleSuffix = shouldDownscale
-      ? `,scale=${effectiveWidth}:${effectiveHeight}`
-      : '';
-    const subsFilter = `subtitles=${subsName}:fontsdir=${fontsDir}${scaleSuffix}`;
+    //
+    // `subsFilter` is the comma-joined pre-overlay chain. It may be empty
+    // when the user exports with no subtitles AND no downscale — in which
+    // case the call sites below substitute a `null` passthrough (for
+    // filter_complex nodes that require a filter expression) or simply
+    // omit `-vf` (for the simple re-encode path).
+    const chainParts: string[] = [];
+    if (hasSubs) {
+      chainParts.push(`subtitles=${subsName}:fontsdir=${fontsDir}`);
+    }
+    if (shouldDownscale) {
+      chainParts.push(`scale=${effectiveWidth}:${effectiveHeight}`);
+    }
+    const subsFilter = chainParts.join(',');
 
     // Decode each image overlay, pre-scale to its final pixel size in JS,
     // then write enough duplicate raw RGBA frames to cover the video
@@ -1006,9 +1057,13 @@ async function burnSubtitlesCore(
         );
       } else {
         // Cuts but no image overlays — apply subs directly to the cut
-        // output.
+        // output. `null` is the passthrough video filter when there are
+        // no subs and no downscale (the filter_complex node still needs
+        // an expression between the source label and [vout]).
         filterParts.push(
-          `${vSource}${subsFilter}[vout]`,
+          subsFilter.length > 0
+            ? `${vSource}${subsFilter}[vout]`
+            : `${vSource}null[vout]`,
         );
       }
 
@@ -1055,11 +1110,15 @@ async function burnSubtitlesCore(
       console.debug('[burn] exec args', args.join(' '));
       exitCode = await ff.exec(args);
     } else {
-      const args = [
-        '-i',
-        inputName,
-        '-vf',
-        subsFilter,
+      // Simple re-encode path: no cuts, no image overlays. When there are
+      // also no subs and no downscale, `subsFilter` is empty — in that case
+      // we simply drop `-vf` and re-encode the source as-is (the user just
+      // wants a clean video, e.g. export-without-subs to share a reference).
+      const args: string[] = ['-i', inputName];
+      if (subsFilter.length > 0) {
+        args.push('-vf', subsFilter);
+      }
+      args.push(
         '-c:v',
         'libx264',
         '-preset',
@@ -1073,7 +1132,7 @@ async function burnSubtitlesCore(
         '-movflags',
         '+faststart',
         outputName,
-      ];
+      );
       console.debug('[burn] exec args', args.join(' '));
       exitCode = await ff.exec(args);
     }

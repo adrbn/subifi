@@ -67,6 +67,39 @@ export function SubtitleList() {
     window.addEventListener('subifi:focus-block', onFocus);
     return () => window.removeEventListener('subifi:focus-block', onFocus);
   }, []);
+
+  // Global keyboard delete: when a row is selected (via the left-side
+  // handle) AND the focus is NOT inside an editable field, Delete /
+  // Backspace / Enter removes the whole subtitle line. This is the
+  // keyboard counterpart to the ✕ button — letting users blow through
+  // a long list fast without reaching for the mouse.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!selectedBlockId) return;
+      if (e.key !== 'Delete' && e.key !== 'Backspace' && e.key !== 'Enter') {
+        return;
+      }
+      // Don't intercept keystrokes that belong to text editing. A focused
+      // textarea / input / contenteditable means the user is typing, not
+      // operating on the row as a whole.
+      const active = document.activeElement as HTMLElement | null;
+      if (active) {
+        const tag = active.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          active.isContentEditable
+        ) {
+          return;
+        }
+      }
+      e.preventDefault();
+      deleteBlock(selectedBlockId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedBlockId, deleteBlock]);
   // Which rows have their per-block style override panel expanded. Tracked
   // locally because it's pure UI state — no need to put it in the store.
   const [openOverrides, setOpenOverrides] = useState<Record<string, boolean>>(
@@ -121,6 +154,41 @@ export function SubtitleList() {
                 isFlash && 'border-amber-400 ring-1 ring-amber-400/60',
               )}
             >
+              {/* Row header: click to SELECT the row without entering the
+                  textarea. This is what enables keyboard delete — it
+                  blurs any focused textarea so the global keydown handler
+                  treats Delete/Backspace/Enter as "remove this row". */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  selectBlock(b.id);
+                  const active = document.activeElement as HTMLElement | null;
+                  active?.blur();
+                  // Also scrub the preview to this row's start — matches
+                  // the implicit "go to" action users expect when they
+                  // click a line's header.
+                  scrubTo(b.start);
+                }}
+                title="Click to select · then Delete / Backspace / Return to remove this line"
+                aria-label={`Select subtitle ${i + 1}`}
+                className={clsx(
+                  'mb-1 flex w-full items-center justify-between rounded px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider transition-colors',
+                  isSelected
+                    ? 'bg-accent/25 text-accent'
+                    : 'bg-bg-hi/40 text-text-muted hover:bg-bg-hi hover:text-text',
+                )}
+              >
+                <span>#{i + 1}</span>
+                <span>
+                  {fmt(b.start)} – {fmt(b.end)}
+                </span>
+                {isSelected && (
+                  <span className="ml-1 text-[9px] opacity-80">
+                    ⌫/↵ to delete
+                  </span>
+                )}
+              </button>
               <div className="flex flex-col gap-1">
                 <textarea
                   ref={(el) => {

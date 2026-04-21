@@ -198,6 +198,12 @@ export function ExportModal() {
   const [rangeStart, setRangeStart] = useState(0);
   const [rangeEnd, setRangeEnd] = useState(videoDuration || 0);
 
+  // "Include subtitles" toggle. When OFF the burn pipeline receives empty
+  // blocks + textOverlays arrays, which skips ASS generation and the
+  // `subtitles=` filter entirely — letting the user export a clean video
+  // (useful for posting unsubtitled reference cuts, A/B comparisons, etc.).
+  const [includeSubtitles, setIncludeSubtitles] = useState(true);
+
   // Re-seed the range when the video changes so handles always start at
   // [0, duration] for a new project.
   useEffect(() => {
@@ -238,8 +244,13 @@ export function ExportModal() {
   }, [exportModalOpen]);
 
   const baseName = videoFile?.name.replace(/\.[^.]+$/, '') ?? 'video';
+  // "Anything to burn" for the CTA gate. When the user explicitly opts out
+  // of subtitles, a re-encoded video IS valid output — so skip the check.
   const hasAnyContent =
-    blocks.length > 0 || overlays.length > 0 || textOverlays.length > 0;
+    !includeSubtitles ||
+    blocks.length > 0 ||
+    overlays.length > 0 ||
+    textOverlays.length > 0;
   const isBurning = status === 'burning';
 
   // Compose the cut list that will actually be sent to the burn pipeline:
@@ -267,9 +278,14 @@ export function ExportModal() {
     setStatus('burning', null);
     setProgress(0);
     try {
-      const burnBlocks = visibleBlocks();
+      // When `includeSubtitles` is off we hand empty block + text-overlay
+      // arrays to the burn pipeline. Image overlays are kept as-is —
+      // they're a separate channel and disabling them has its own toggle
+      // on the sidebar.
+      const burnBlocks = includeSubtitles ? visibleBlocks() : [];
       const burnOverlays = imageOverlaysVisible ? overlays : [];
-      const burnTextOverlays = textOverlaysVisible ? textOverlays : [];
+      const burnTextOverlays =
+        includeSubtitles && textOverlaysVisible ? textOverlays : [];
       const out = await burnSubtitles(
         {
           videoFile,
@@ -285,7 +301,12 @@ export function ExportModal() {
         },
         (p) => setProgress(p),
       );
-      const suffix = rangeMode === 'custom' ? '-clip' : '-subbed';
+      const suffix =
+        rangeMode === 'custom'
+          ? '-clip'
+          : includeSubtitles
+            ? '-subbed'
+            : '-clean';
       downloadBlob(out, `${baseName}${suffix}.mp4`, 'video/mp4');
       setStatus('ready', null);
       setExportModalOpen(false);
@@ -413,6 +434,24 @@ export function ExportModal() {
                 )}
               </div>
 
+              {/* Content toggles */}
+              <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-bg p-3 text-xs text-text hover:border-border-hi">
+                <input
+                  type="checkbox"
+                  checked={includeSubtitles}
+                  onChange={(e) => setIncludeSubtitles(e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 accent-emerald-500"
+                />
+                <span className="flex-1">
+                  <span className="font-medium">Burn subtitles into video</span>
+                  <span className="mt-0.5 block text-[11px] text-text-muted">
+                    {includeSubtitles
+                      ? 'Subtitle blocks and text overlays will be rendered into the MP4.'
+                      : 'Subtitles and text overlays will be SKIPPED. Output is the clean video.'}
+                  </span>
+                </span>
+              </label>
+
               {/* Output summary */}
               <div className="space-y-1 rounded-md border border-border bg-bg p-3 text-xs">
                 <div className="font-semibold uppercase tracking-wider text-text-muted">
@@ -449,7 +488,9 @@ export function ExportModal() {
                 {hasAnyContent
                   ? rangeMode === 'custom'
                     ? `Start export · ${formatTime(exportLengthSec)}`
-                    : 'Start export'
+                    : includeSubtitles
+                      ? 'Start export'
+                      : 'Export clean video'
                   : 'Add subtitles or overlays first'}
               </button>
             </>
