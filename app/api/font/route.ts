@@ -1,19 +1,20 @@
 import { NextResponse } from 'next/server';
+import { decompress as wawoff2Decompress } from 'wawoff2';
 import { findCuratedFont, nearestVariant } from '@/lib/curated-fonts';
-// `wawoff2` is a pure-JS port of Google's woff2 tool. We use it to decompress
-// the woff2 files that DSFR ships into TTF/OTF bytes that ffmpeg-wasm's
-// freetype build can actually read (freetype-wasm has no brotli, so it
-// silently rejects woff2). The decompress() output for Marianne is
-// OpenType (magic 0x4F54544F = 'OTTO'), which our burn pipeline already
-// accepts.
+
+// `wawoff2` is a pure-JS port of Google's woff2 tool. We use it to
+// decompress the woff2 files that curated CDNs ship into TTF/OTF bytes
+// that ffmpeg-wasm's freetype build can actually read (freetype-wasm
+// has no brotli, so it silently rejects woff2). The decompress()
+// output for Marianne is OpenType (magic 0x4F54544F = 'OTTO'), which
+// our burn pipeline already accepts.
 //
-// Loaded via dynamic import so the cold-start cost is only paid for
-// curated-font requests.
+// Static import + `serverExternalPackages: ['wawoff2']` in next.config
+// is more reliable on Vercel than dynamic import — webpack can't
+// trace the inline-base64 wasm in wawoff2's emscripten output, so
+// trying to bundle it fails the build.
 async function decompressWoff2(woff2: ArrayBuffer): Promise<ArrayBuffer> {
-  const mod = await import('wawoff2');
-  // wawoff2's TypeScript types accept `Uint8Array | Buffer`; the compiled
-  // wasm wrapper returns a Uint8Array. We narrow on the runtime side.
-  const out = (await mod.decompress(new Uint8Array(woff2))) as Uint8Array;
+  const out = await wawoff2Decompress(new Uint8Array(woff2));
   return out.buffer.slice(
     out.byteOffset,
     out.byteOffset + out.byteLength,
