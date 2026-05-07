@@ -672,18 +672,29 @@ export function generateAss({
       (t.backgroundRadius ?? 0) > 0 &&
       !!textOverlayMetrics?.has(i);
 
-    // textAlign on the overlay's Style now controls libass's edge
-    // anchoring directly:
-    //   center → Alignment 5, \pos = box center (matches preview)
-    //   left   → Alignment 4, \pos = LEFT edge of text at positionX
-    //   right  → Alignment 6, \pos = RIGHT edge of text at positionX
-    // For non-center alignments the box is no longer "box-centered at
-    // positionX" like the preview's CSS — it's edge-anchored. That
-    // matches the typical subtitle-editor mental model where positionX
-    // represents WHERE THE TEXT STARTS (or ends, for right) rather
-    // than where its centre sits.
+    // textAlign on the overlay's Style controls per-line alignment in
+    // the export (Alignment 4/5/6), matching the preview. To also
+    // match the preview's BOX-CENTERED behaviour (CSS `transform:
+    // translate(-50%)`), we counter-shift \pos by ±half the actual
+    // rendered text width so the box centre still lands at
+    // positionX × videoWidth even when libass anchors at the
+    // left/right edge.
+    //
+    // metrics.width is from Canvas measureText at the nominal fontSize.
+    // libass renders at fontSize × boost. The empirical libass-vs-CSS
+    // width ratio for our fonts is ~0.7 (libass renders narrower for
+    // the same nominal fs), so actual rendered width ≈ metrics.width
+    // × 0.7 × boost.
+    const LIBASS_CSS_RATIO = 0.7;
     const boostFor = fontSizeBoostFor(t.fontFamily);
-    const posX = tx;
+    const renderedHalfWidth = textOverlayMetrics?.has(i)
+      ? Math.round(textOverlayMetrics.get(i)!.width * LIBASS_CSS_RATIO * boostFor / 2)
+      : 0;
+    let posX = tx;
+    if (renderedHalfWidth > 0) {
+      if (t.textAlign === 'left') posX = tx - renderedHalfWidth;
+      else if (t.textAlign === 'right') posX = tx + renderedHalfWidth;
+    }
 
     if (needsDual) {
       const metrics = textOverlayMetrics!.get(i)!;
