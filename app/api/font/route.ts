@@ -1,25 +1,7 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { NextResponse } from 'next/server';
-import { decompress as wawoff2Decompress } from 'wawoff2';
 import { findCuratedFont, nearestVariant } from '@/lib/curated-fonts';
-
-// `wawoff2` is a pure-JS port of Google's woff2 tool. We use it to
-// decompress the woff2 files that curated CDNs ship into TTF/OTF bytes
-// that ffmpeg-wasm's freetype build can actually read (freetype-wasm
-// has no brotli, so it silently rejects woff2). The decompress()
-// output for Marianne is OpenType (magic 0x4F54544F = 'OTTO'), which
-// our burn pipeline already accepts.
-//
-// Static import + `serverExternalPackages: ['wawoff2']` in next.config
-// is more reliable on Vercel than dynamic import — webpack can't
-// trace the inline-base64 wasm in wawoff2's emscripten output, so
-// trying to bundle it fails the build.
-async function decompressWoff2(woff2: ArrayBuffer): Promise<ArrayBuffer> {
-  const out = await wawoff2Decompress(new Uint8Array(woff2));
-  return out.buffer.slice(
-    out.byteOffset,
-    out.byteOffset + out.byteLength,
-  ) as ArrayBuffer;
-}
 
 // Server-side proxy that returns TTF font binaries for any Google Font.
 //
@@ -134,73 +116,44 @@ async function fetchFromGoogleCss(
   }
 }
 
-// SSRF allowlist — curated fonts can only come from these hosts. Any other
-// URL configured in lib/curated-fonts.ts will be rejected before we make
-// the outbound request. Add entries here when you onboard a new curated
-// font from a different CDN.
-const CURATED_HOSTS = new Set<string>([
-  'forge.apps.education.fr',
-  'cdn.jsdelivr.net',
-]);
-
-async function fetchWoff2AndDecompress(url: string): Promise<ArrayBuffer | null> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (!CURATED_HOSTS.has(parsed.hostname)) return null;
-  let res: Response;
-  try {
-    res = await fetch(parsed.toString(), { cache: 'force-cache' });
-  } catch {
-    return null;
-  }
-  if (!res.ok) return null;
-  const woff2 = await res.arrayBuffer();
-  if (woff2.byteLength === 0) return null;
-  try {
-    return await decompressWoff2(woff2);
-  } catch (err) {
-    console.warn('[api/font] wawoff2 decompress failed', { url, err });
-    return null;
-  }
-}
-
-// Resolve a curated font (e.g. Marianne) to a TTF/OTF buffer. Steps:
-//   1. Snap the requested (weight, italic) to the nearest available variant
-//      so legacy projects using a weight that's missing from the primary
-//      CDN keep exporting cleanly.
-//   2. Try the primary CDN's woff2; on failure try the fallback CDN.
-//   3. Decompress to OTF/TTF via wawoff2 so freetype-wasm can read it.
+// Resolve a curated font (e.g. Marianne) to its OTF bytes. Curated
+// fonts are pre-bundled under /public/fonts/curated/... so this is a
+// straight `readFile` — no network, no decompression, no surprises.
+//
+// We snap the requested (weight, italic) to the nearest available
+// variant so legacy projects using a weight that's missing from the
+// bundled set still export cleanly.
 async function fetchCurated(
   family: string,
   weight: number,
   italic: boolean,
-): Promise<{ buf: ArrayBuffer; weight: number; italic: boolean } | null> {
+): Promise<{ buf: Buffer; weight: number; italic: boolean } | null> {
   const font = findCuratedFont(family);
   if (!font) return null;
   const variant = nearestVariant(font, weight, italic);
-  const primary = font.urlFor(variant);
-  if (primary) {
-    const buf = await fetchWoff2AndDecompress(primary);
-    if (buf) {
-      return { buf, weight: variant.weight, italic: variant.italic };
-    }
+  const url = font.urlFor(variant);
+  // urlFor returns paths like `/fonts/curated/marianne/...` — strip the
+  // leading slash and resolve against `process.cwd()/public/`.
+  if (!url || !url.startsWith('/')) return null;
+  // Defence-in-depth: confine reads to /public/fonts/curated/ so a
+  // future bug in `urlFor` can't escape into the rest of the disk.
+  if (!url.startsWith('/fonts/curated/')) {
+    console.warn(
+      `[api/font] curated font url outside /fonts/curated/, refusing: ${url}`,
+    );
+    return null;
   }
-  // Primary failed — fall back to the secondary if the variant is on it.
-  const fallback = font.fallbackUrlFor?.(variant) ?? null;
-  if (fallback) {
-    const buf = await fetchWoff2AndDecompress(fallback);
-    if (buf) {
-      console.info(
-        `[api/font] used fallback CDN for ${family}@${weight}${italic ? 'i' : ''}`,
-      );
-      return { buf, weight: variant.weight, italic: variant.italic };
-    }
+  const filePath = join(process.cwd(), 'public', url.replace(/^\//, ''));
+  try {
+    const buf = await readFile(filePath);
+    return { buf, weight: variant.weight, italic: variant.italic };
+  } catch (err) {
+    console.warn(
+      `[api/font] curated font read failed for ${family}@${weight}${italic ? 'i' : ''}`,
+      { filePath, err },
+    );
+    return null;
   }
-  return null;
 }
 
 export async function GET(req: Request) {
@@ -242,8 +195,8 @@ export async function GET(req: Request) {
     );
   }
 
-  // Curated fonts (Marianne, etc.) take priority — they're not on Google
-  // Fonts and have to be fetched + decompressed from their own CDN.
+  // Curated fonts (Marianne, etc.) take priority — they're not on
+  // Google Fonts and ship as static OTF assets under /public.
   // `findCuratedFont` is fast (linear scan over a tiny list) so the
   // common Google-Font path pays no measurable overhead.
   const curated = await fetchCurated(family, weight, italic);
@@ -263,7 +216,13 @@ export async function GET(req: Request) {
     if (curated.italic !== italic) {
       headers['x-font-resolved-italic'] = String(curated.italic);
     }
-    return new Response(curated.buf, { status: 200, headers });
+    // Convert Node Buffer → ArrayBuffer slice for Response/BodyInit
+    // typing. The bytes are identical; only the JS view differs.
+    const body = curated.buf.buffer.slice(
+      curated.buf.byteOffset,
+      curated.buf.byteOffset + curated.buf.byteLength,
+    ) as ArrayBuffer;
+    return new Response(body, { status: 200, headers });
   }
 
   // Try Fontsource (reliable static TTFs), fall back to Google CSS scrape.

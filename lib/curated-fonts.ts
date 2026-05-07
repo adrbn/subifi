@@ -5,10 +5,14 @@
 // Marianne is the official French government typeface (Etalab Open
 // License). The full family — Thin (100), Light (300), Regular (400),
 // Medium (500), Bold (700), ExtraBold (800) and their italics — is
-// hosted on forge.apps.education.fr by the DRANE Lyon, who maintain a
-// clean GitLab repo of all weights. The official @gouvfr/dsfr package
-// on npm only ships 300/400/500/700, so we use it as a secondary
-// fallback only when the primary source is unreachable.
+// pre-converted from WOFF2 (DRANE Lyon's GitLab forge) to OTF at build
+// time by `scripts/convert-marianne.mjs` and stored under
+// `/public/fonts/curated/marianne/`. Serving them as static assets has
+// three big advantages over fetching+decompressing on the fly:
+//   - No runtime dependency on `wawoff2` (which has trouble bundling
+//     on Vercel because of its inline-base64 wasm).
+//   - Zero CPU cost on every request — the OTF is just a static file.
+//   - Works offline (e.g. local dev with no network).
 
 export type FontVariant = {
   weight: number;
@@ -20,27 +24,17 @@ export type CuratedFont = {
   family: string;        // CSS font-family name we register via @font-face
   displayName: string;   // what the picker shows
   variants: FontVariant[];
-  // Resolve the CDN URL for a given variant. Returning null means "not
-  // available from this source".
+  // Resolve the URL for a given variant. Returns null when the variant
+  // isn't available. The URL is resolved relative to the site origin
+  // (e.g. `/fonts/...` for a static asset under /public).
   urlFor: (v: FontVariant) => string | null;
-  // Optional secondary CDN. /api/font tries the primary URL first; on
-  // network failure it falls back here. Returning null means "this
-  // variant isn't on the secondary either", which short-circuits the
-  // fallback (avoids a wasted round-trip).
-  fallbackUrlFor?: (v: FontVariant) => string | null;
 };
 
-// Apps Education (DRANE Lyon) hosts the full Marianne family on a public
-// GitLab forge. They keep all 12 variants (6 weights × 2 italics) which
-// the DSFR npm package omits.
-const APPS_EDU_MARIANNE =
-  'https://forge.apps.education.fr/drane-lyon/fonts/-/raw/main';
-
-// Secondary fallback — DSFR npm package via jsDelivr. Only ships 4 of
-// the 6 weights but is on a more reputable CDN, so we try it second
-// when the primary source is unreachable for one of those 4 weights.
-const DSFR_VERSION = '1.13.0';
-const DSFR_FONTS = `https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@${DSFR_VERSION}/dist/fonts`;
+// Static assets under `/public/fonts/curated/marianne/`. The conversion
+// from upstream WOFF2 happens at build time via
+// `scripts/convert-marianne.mjs`. Re-run that script when bumping the
+// upstream version.
+const MARIANNE_STATIC = '/fonts/curated/marianne';
 
 function marianneWeightName(weight: number): string | null {
   switch (weight) {
@@ -54,30 +48,19 @@ function marianneWeightName(weight: number): string | null {
   }
 }
 
-// DSFR npm package — only Light, Regular, Medium, Bold are published.
-// Returns null for the other weights so the caller can move on to the
-// primary (Apps Education) source.
-function marianneDsfrFilename(v: FontVariant): string | null {
-  if (![300, 400, 500, 700].includes(v.weight)) return null;
+function marianneStaticPath(v: FontVariant): string | null {
   const w = marianneWeightName(v.weight);
   if (!w) return null;
   const italic = v.italic ? '_Italic' : '';
-  return `Marianne-${w}${italic}.woff2`;
-}
-
-function marianneAppsEduFilename(v: FontVariant): string | null {
-  const w = marianneWeightName(v.weight);
-  if (!w) return null;
-  const italic = v.italic ? '_Italic' : '';
-  return `Marianne-${w}${italic}.woff2`;
+  return `${MARIANNE_STATIC}/Marianne-${w}${italic}.otf`;
 }
 
 export const CURATED_FONTS: CuratedFont[] = [
   {
     family: 'Marianne',
     displayName: 'Marianne',
-    // All 12 variants of the Marianne typeface. Confirmed available on
-    // forge.apps.education.fr/drane-lyon/fonts (probed exhaustively).
+    // All 12 variants of the Marianne typeface — pre-bundled in
+    // /public so they ship on every deploy with no runtime fetching.
     variants: [
       { weight: 100, italic: false, label: 'Thin' },
       { weight: 100, italic: true,  label: 'Thin Italic' },
@@ -92,15 +75,7 @@ export const CURATED_FONTS: CuratedFont[] = [
       { weight: 800, italic: false, label: 'ExtraBold' },
       { weight: 800, italic: true,  label: 'ExtraBold Italic' },
     ],
-    // Primary URL: Apps Education forge — has every variant.
-    urlFor: (v) => {
-      const name = marianneAppsEduFilename(v);
-      return name ? `${APPS_EDU_MARIANNE}/${name}` : null;
-    },
-    fallbackUrlFor: (v) => {
-      const name = marianneDsfrFilename(v);
-      return name ? `${DSFR_FONTS}/${name}` : null;
-    },
+    urlFor: (v) => marianneStaticPath(v),
   },
 ];
 
@@ -112,30 +87,15 @@ export function findCuratedFont(family: string): CuratedFont | null {
 // (family, weight, italic) triple — calling twice with the same variant is a
 // no-op.
 //
-// We point the `src` at our own /api/font proxy rather than the upstream
-// CDN URL because some upstreams (e.g. forge.apps.education.fr) don't
-// return CORS headers, and the browser refuses to load cross-origin
-// fonts without `access-control-allow-origin`. Going through /api/font
-// keeps the request same-origin and gives the burn pipeline and the
-// preview the *same* font bytes (the server caches aggressively, so
-// the decompress cost is one-time per variant).
+// `src` points at the same-origin static asset under /public so the
+// browser doesn't have to deal with cross-origin font CORS, and the
+// burn pipeline and the preview load the EXACT same bytes.
 export function loadCuratedFontVariant(font: CuratedFont, variant: FontVariant): void {
   if (typeof document === 'undefined') return;
   const id = `cf-remote-${font.family}-${variant.weight}-${variant.italic ? 'i' : 'n'}`;
   if (document.getElementById(id)) return;
-  // Sanity check: only register a CSS rule if at least one CDN can serve
-  // this variant. Avoids polluting the DOM with rules pointing at /api
-  // URLs that 404 — the picker stays clean.
-  const hasUpstream =
-    font.urlFor(variant) !== null ||
-    (font.fallbackUrlFor?.(variant) ?? null) !== null;
-  if (!hasUpstream) return;
-  const params = new URLSearchParams({
-    family: font.family,
-    weight: String(variant.weight),
-  });
-  if (variant.italic) params.set('italic', '1');
-  const proxyUrl = `/api/font?${params.toString()}`;
+  const url = font.urlFor(variant);
+  if (!url) return;
   const el = document.createElement('style');
   el.id = id;
   el.textContent =
@@ -143,9 +103,7 @@ export function loadCuratedFontVariant(font: CuratedFont, variant: FontVariant):
     ` font-family: "${font.family}";` +
     ` font-weight: ${variant.weight};` +
     ` font-style: ${variant.italic ? 'italic' : 'normal'};` +
-    // Format hint omitted — the browser sniffs the file (the proxy may
-    // serve OTF, TTF, or woff2 depending on the upstream).
-    ` src: url("${proxyUrl}");` +
+    ` src: url("${url}") format("opentype");` +
     ` font-display: swap;` +
     ` }`;
   document.head.appendChild(el);

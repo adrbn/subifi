@@ -20,14 +20,6 @@ const COOP_COEP_HEADERS = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // `wawoff2` is a 1.3 MB pure-JS package that wraps an emscripten-built
-  // wasm decoder for WOFF2 → TTF conversion. It uses Node-specific
-  // globals (Buffer, fs in some code paths) and inline-base64 wasm that
-  // confuses Next.js's webpack tracing. Externalizing it forces the
-  // serverless function to `require('wawoff2')` at runtime from
-  // node_modules/, which avoids the bundle errors that fail the Vercel
-  // build. Only used by /api/font for curated fonts (Marianne).
-  serverExternalPackages: ['wawoff2'],
   async headers() {
     return [
       {
