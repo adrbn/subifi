@@ -462,20 +462,16 @@ export function generateAss({
       positionX: t.positionX,
       positionY: t.positionY,
       maxWidth: t.maxWidth,
-      // FORCE center alignment for the export Style. The preview wraps
-      // each text overlay in a CSS box and applies `transform:
-      // translate(-50%, -50%)`, which always anchors the BOX CENTER at
-      // positionX/positionY regardless of `text-align`. ASS Alignment
-      // controls BOTH the anchor and the per-line text alignment as a
-      // single value — using `4` (left) or `6` (right) anchors the
-      // text's left/right EDGE at \pos, which produces a hard horizontal
-      // shift vs the preview. We always anchor at center so positions
-      // match. Trade-off: multi-line text with `text-align: left/right`
-      // will render with center-aligned lines in the export (vs left/
-      // right-aligned per line in the preview). Acceptable for now —
-      // most overlays are single-line where text-align is visually a
-      // no-op anyway.
-      textAlign: 'center',
+      // Honour the user's textAlign. ASS Alignment controls both the
+      // \pos anchor AND the per-line text alignment as a single value
+      // — using `4` (left) or `6` (right) would normally anchor the
+      // text's left/right EDGE at \pos, producing a horizontal shift
+      // vs the preview's box-centered behaviour. We compensate at the
+      // dialogue line by shifting \pos.x by ±boxWidth/2 (computed
+      // from textOverlayMetrics) so the BOX CENTER still lands at
+      // positionX × videoWidth, while per-line alignment within the
+      // box matches what the user sees in the preview.
+      textAlign: t.textAlign,
       lineHeight: 1.2,
       letterSpacing: 0,
       wordSpacing: 0,
@@ -676,12 +672,25 @@ export function generateAss({
       (t.backgroundRadius ?? 0) > 0 &&
       !!textOverlayMetrics?.has(i);
 
+    // textAlign on the overlay's Style now controls libass's edge
+    // anchoring directly:
+    //   center → Alignment 5, \pos = box center (matches preview)
+    //   left   → Alignment 4, \pos = LEFT edge of text at positionX
+    //   right  → Alignment 6, \pos = RIGHT edge of text at positionX
+    // For non-center alignments the box is no longer "box-centered at
+    // positionX" like the preview's CSS — it's edge-anchored. That
+    // matches the typical subtitle-editor mental model where positionX
+    // represents WHERE THE TEXT STARTS (or ends, for right) rather
+    // than where its centre sits.
+    const boostFor = fontSizeBoostFor(t.fontFamily);
+    const posX = tx;
+
     if (needsDual) {
       const metrics = textOverlayMetrics!.get(i)!;
       const padX = t.backgroundPaddingX;
       const padY = t.backgroundPaddingY;
       const radius = Math.round((t.backgroundRadius ?? 0) * RADIUS_BOOST);
-      const boostedFs = Math.round(t.fontSize * fontSizeBoostFor(t.fontFamily));
+      const boostedFs = Math.round(t.fontSize * boostFor);
       const boxW = metrics.width * BOX_SCALE + padX * 2;
       const boxH = metrics.height * BOX_SCALE + padY * 2;
       const boxX = Math.round(tx - boxW / 2);
@@ -702,14 +711,14 @@ export function generateAss({
         `\\1a&H${bgAlpha}&` +
         `\\bord0\\shad0\\p1}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},DrawBG,,0,0,0,,${bgInline}${drawPath}`);
-      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${tx},${ty})\\fs${boostedFs}}${text}`);
+      overlayEvents.push(`Dialogue: 3,${start},${end},TO${i},,0,0,0,,{\\pos(${posX},${ty})\\fs${boostedFs}}${text}`);
     } else {
       const hasBg = t.backgroundOpacity > 0;
       const bordOverrides = hasBg
         ? `\\xbord${t.backgroundPaddingX}\\ybord${t.backgroundPaddingY}`
         : '';
-      const boostedFs = Math.round(t.fontSize * fontSizeBoostFor(t.fontFamily));
-      const inline = `{\\pos(${tx},${ty})\\fs${boostedFs}${bordOverrides}}`;
+      const boostedFs = Math.round(t.fontSize * boostFor);
+      const inline = `{\\pos(${posX},${ty})\\fs${boostedFs}${bordOverrides}}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},TO${i},,0,0,0,,${inline}${text}`);
     }
   });

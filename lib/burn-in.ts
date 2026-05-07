@@ -510,8 +510,13 @@ function measureBlockText(
   return results;
 }
 
-// Measure text overlay dimensions for rounded-rect backgrounds (same as
-// measureBlockText but for TextOverlay items).
+// Measure text overlay dimensions. Used for two things:
+//   1. Sizing the rounded-rect background box (only overlays with bg).
+//   2. Computing the \pos shift for non-center textAlign (ALL overlays
+//      with textAlign != 'center' need the box width to translate the
+//      preview's box-centered anchor into libass's edge-anchored \pos).
+// We measure every overlay so the ASS generator can apply either path
+// uniformly.
 function measureTextOverlays(
   overlays: TextOverlay[],
 ): Map<number, BlockMetrics> {
@@ -522,7 +527,6 @@ function measureTextOverlays(
 
   for (let i = 0; i < overlays.length; i++) {
     const t = overlays[i];
-    if (t.backgroundOpacity <= 0 || (t.backgroundRadius ?? 0) <= 0) continue;
 
     const italic = t.italic ? 'italic ' : '';
     ctx.font = `${italic}${t.fontWeight} ${t.fontSize}px "${t.fontFamily}", system-ui, sans-serif`;
