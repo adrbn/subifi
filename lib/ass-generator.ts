@@ -19,7 +19,24 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 //      vector strokes don't match (~10-15% extra).
 // Combined, preview text appears ~30-40% larger than export at the same
 // nominal font size. FONT_SIZE_BOOST compensates.
-const FONT_SIZE_BOOST = 1.7;    // matches CSS/CoreText rendering weight
+//
+// Default 1.7 is calibrated for Google Fonts (Inter, Roboto, etc.)
+// where CoreText rendered noticeably bigger than libass at the same
+// nominal `font-size`. Some fonts have tighter em-box metrics where
+// libass already renders at parity with CoreText — applying the 1.7×
+// boost overshoots and produces visibly oversized text in the export.
+// Override per family in `FONT_SIZE_BOOST_OVERRIDES` below.
+const FONT_SIZE_BOOST_DEFAULT = 1.7;
+const FONT_SIZE_BOOST_OVERRIDES: Record<string, number> = {
+  // Marianne (DSFR) — empirically, libass rendering of the bundled OTF
+  // matches CSS/CoreText at 1:1, so no boost is required. Confirmed
+  // by rendering "Perché imparare il francese?" at fontSize=78 with
+  // boost=1.0 and matching the preview's visual width.
+  Marianne: 1.0,
+};
+function fontSizeBoostFor(family: string): number {
+  return FONT_SIZE_BOOST_OVERRIDES[family] ?? FONT_SIZE_BOOST_DEFAULT;
+}
 const RADIUS_BOOST = 1.4;       // 40% more radius to match small-scale perception
 // Background box scale partially tracks FONT_SIZE_BOOST. Metrics come from
 // Canvas measureText at the NOMINAL fontSize, but libass paints text at
@@ -231,7 +248,7 @@ function buildStyleLine(name: string, s: Style, mode: StyleMode = 'auto'): strin
   const italic = s.italic ? -1 : 0;
   const align = alignmentNumber(s.textAlign);
   const spacing = s.letterSpacing ?? 0;
-  const boostedFontSize = Math.round(s.fontSize * FONT_SIZE_BOOST);
+  const boostedFontSize = Math.round(s.fontSize * fontSizeBoostFor(s.fontFamily));
   return `Style: ${name},${s.fontFamily},${boostedFontSize},${primary},${secondary},${outlineCol},${backCol},${bold},${italic},0,0,100,100,${spacing},0,${borderStyle},${outline},0,${align},10,10,10,1`;
 }
 
@@ -587,7 +604,7 @@ export function generateAss({
       const padX = merged.backgroundPaddingX;
       const padY = merged.backgroundPaddingY;
       const radius = Math.round((merged.backgroundRadius ?? 0) * RADIUS_BOOST);
-      const boostedFs = Math.round(merged.fontSize * FONT_SIZE_BOOST);
+      const boostedFs = Math.round(merged.fontSize * fontSizeBoostFor(merged.fontFamily));
       // Box is sized from the canvas-measured text dims (padded). We do NOT
       // apply FONT_SIZE_BOOST here — see BOX_SCALE comment.
       const boxW = metrics.width * BOX_SCALE + padX * 2;
@@ -626,7 +643,7 @@ export function generateAss({
       const bordOverrides = hasBg
         ? `\\xbord${merged.backgroundPaddingX}\\ybord${merged.backgroundPaddingY}`
         : '';
-      const boostedFs = Math.round(merged.fontSize * FONT_SIZE_BOOST);
+      const boostedFs = Math.round(merged.fontSize * fontSizeBoostFor(merged.fontFamily));
       const inline = `{\\pos(${posX},${posY})\\fs${boostedFs}${bordOverrides}}`;
       events.push(`Dialogue: 0,${start},${end},${styleName},,0,0,0,,${inline}${text}`);
     }
@@ -668,7 +685,7 @@ export function generateAss({
       const padX = t.backgroundPaddingX;
       const padY = t.backgroundPaddingY;
       const radius = Math.round((t.backgroundRadius ?? 0) * RADIUS_BOOST);
-      const boostedFs = Math.round(t.fontSize * FONT_SIZE_BOOST);
+      const boostedFs = Math.round(t.fontSize * fontSizeBoostFor(t.fontFamily));
       const boxW = metrics.width * BOX_SCALE + padX * 2;
       const boxH = metrics.height * BOX_SCALE + padY * 2;
       const boxX = Math.round(tx - boxW / 2);
@@ -695,7 +712,7 @@ export function generateAss({
       const bordOverrides = hasBg
         ? `\\xbord${t.backgroundPaddingX}\\ybord${t.backgroundPaddingY}`
         : '';
-      const boostedFs = Math.round(t.fontSize * FONT_SIZE_BOOST);
+      const boostedFs = Math.round(t.fontSize * fontSizeBoostFor(t.fontFamily));
       const inline = `{\\pos(${tx},${ty})\\fs${boostedFs}${bordOverrides}}`;
       overlayEvents.push(`Dialogue: 2,${start},${end},TO${i},,0,0,0,,${inline}${text}`);
     }
