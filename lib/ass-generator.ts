@@ -449,7 +449,20 @@ export function generateAss({
       positionX: t.positionX,
       positionY: t.positionY,
       maxWidth: t.maxWidth,
-      textAlign: t.textAlign,
+      // FORCE center alignment for the export Style. The preview wraps
+      // each text overlay in a CSS box and applies `transform:
+      // translate(-50%, -50%)`, which always anchors the BOX CENTER at
+      // positionX/positionY regardless of `text-align`. ASS Alignment
+      // controls BOTH the anchor and the per-line text alignment as a
+      // single value — using `4` (left) or `6` (right) anchors the
+      // text's left/right EDGE at \pos, which produces a hard horizontal
+      // shift vs the preview. We always anchor at center so positions
+      // match. Trade-off: multi-line text with `text-align: left/right`
+      // will render with center-aligned lines in the export (vs left/
+      // right-aligned per line in the preview). Acceptable for now —
+      // most overlays are single-line where text-align is visually a
+      // no-op anyway.
+      textAlign: 'center',
       lineHeight: 1.2,
       letterSpacing: 0,
       wordSpacing: 0,
