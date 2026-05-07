@@ -1,4 +1,24 @@
 import { NextResponse } from 'next/server';
+import { findCuratedFont, nearestVariant } from '@/lib/curated-fonts';
+// `wawoff2` is a pure-JS port of Google's woff2 tool. We use it to decompress
+// the woff2 files that DSFR ships into TTF/OTF bytes that ffmpeg-wasm's
+// freetype build can actually read (freetype-wasm has no brotli, so it
+// silently rejects woff2). The decompress() output for Marianne is
+// OpenType (magic 0x4F54544F = 'OTTO'), which our burn pipeline already
+// accepts.
+//
+// Loaded via dynamic import so the cold-start cost is only paid for
+// curated-font requests.
+async function decompressWoff2(woff2: ArrayBuffer): Promise<ArrayBuffer> {
+  const mod = await import('wawoff2');
+  // wawoff2's TypeScript types accept `Uint8Array | Buffer`; the compiled
+  // wasm wrapper returns a Uint8Array. We narrow on the runtime side.
+  const out = (await mod.decompress(new Uint8Array(woff2))) as Uint8Array;
+  return out.buffer.slice(
+    out.byteOffset,
+    out.byteOffset + out.byteLength,
+  ) as ArrayBuffer;
+}
 
 // Server-side proxy that returns TTF font binaries for any Google Font.
 //
@@ -113,12 +133,88 @@ async function fetchFromGoogleCss(
   }
 }
 
+// SSRF allowlist — curated fonts can only come from these hosts. Any other
+// URL configured in lib/curated-fonts.ts will be rejected before we make
+// the outbound request. Add entries here when you onboard a new curated
+// font from a different CDN.
+const CURATED_HOSTS = new Set<string>([
+  'forge.apps.education.fr',
+  'cdn.jsdelivr.net',
+]);
+
+async function fetchWoff2AndDecompress(url: string): Promise<ArrayBuffer | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!CURATED_HOSTS.has(parsed.hostname)) return null;
+  let res: Response;
+  try {
+    res = await fetch(parsed.toString(), { cache: 'force-cache' });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const woff2 = await res.arrayBuffer();
+  if (woff2.byteLength === 0) return null;
+  try {
+    return await decompressWoff2(woff2);
+  } catch (err) {
+    console.warn('[api/font] wawoff2 decompress failed', { url, err });
+    return null;
+  }
+}
+
+// Resolve a curated font (e.g. Marianne) to a TTF/OTF buffer. Steps:
+//   1. Snap the requested (weight, italic) to the nearest available variant
+//      so legacy projects using a weight that's missing from the primary
+//      CDN keep exporting cleanly.
+//   2. Try the primary CDN's woff2; on failure try the fallback CDN.
+//   3. Decompress to OTF/TTF via wawoff2 so freetype-wasm can read it.
+async function fetchCurated(
+  family: string,
+  weight: number,
+  italic: boolean,
+): Promise<{ buf: ArrayBuffer; weight: number; italic: boolean } | null> {
+  const font = findCuratedFont(family);
+  if (!font) return null;
+  const variant = nearestVariant(font, weight, italic);
+  const primary = font.urlFor(variant);
+  if (primary) {
+    const buf = await fetchWoff2AndDecompress(primary);
+    if (buf) {
+      return { buf, weight: variant.weight, italic: variant.italic };
+    }
+  }
+  // Primary failed — fall back to the secondary if the variant is on it.
+  const fallback = font.fallbackUrlFor?.(variant) ?? null;
+  if (fallback) {
+    const buf = await fetchWoff2AndDecompress(fallback);
+    if (buf) {
+      console.info(
+        `[api/font] used fallback CDN for ${family}@${weight}${italic ? 'i' : ''}`,
+      );
+      return { buf, weight: variant.weight, italic: variant.italic };
+    }
+  }
+  return null;
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const family = searchParams.get('family')?.trim();
   const weightRaw = searchParams.get('weight')?.trim() ?? '400';
   const weight = Number(weightRaw);
   const subset = searchParams.get('subset')?.trim() ?? 'latin';
+  // Accept `italic=1` (or `true`) so curated fonts can serve italic
+  // variants. Google Fonts requests don't currently use this param —
+  // burn-in.ts asks for upright weights only and applies italics via
+  // the libass `\i1` tag at render time.
+  const italic = ['1', 'true', 'yes'].includes(
+    (searchParams.get('italic') ?? '').toLowerCase(),
+  );
 
   if (!family) {
     return NextResponse.json(
@@ -143,6 +239,30 @@ export async function GET(req: Request) {
       { error: 'invalid subset value' },
       { status: 400 },
     );
+  }
+
+  // Curated fonts (Marianne, etc.) take priority — they're not on Google
+  // Fonts and have to be fetched + decompressed from their own CDN.
+  // `findCuratedFont` is fast (linear scan over a tiny list) so the
+  // common Google-Font path pays no measurable overhead.
+  const curated = await fetchCurated(family, weight, italic);
+  if (curated) {
+    const headers: Record<string, string> = {
+      'content-type': 'font/otf',
+      'content-length': String(curated.buf.byteLength),
+      'cache-control': 'public, max-age=31536000, immutable',
+      'cross-origin-resource-policy': 'same-origin',
+    };
+    // Surface the actual variant the server delivered so burn-in.ts can
+    // log it. Useful when the requested weight doesn't exist and we
+    // snapped to the nearest available one.
+    if (curated.weight !== weight) {
+      headers['x-font-resolved-weight'] = String(curated.weight);
+    }
+    if (curated.italic !== italic) {
+      headers['x-font-resolved-italic'] = String(curated.italic);
+    }
+    return new Response(curated.buf, { status: 200, headers });
   }
 
   // Try Fontsource (reliable static TTFs), fall back to Google CSS scrape.

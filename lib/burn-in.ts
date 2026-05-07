@@ -341,16 +341,31 @@ function buildOverlayComplex(
 // wrote a WOFF2 file to fontsdir, libass would skip it and fall back to a
 // built-in font — causing the "wrong font in export" bug. Better to return
 // null and let the caller surface a clear error.
-async function fetchGoogleFontFile(
+// Fetch a font file via the /api/font proxy. The endpoint serves both
+// Google Fonts (via Fontsource / CSS scrape) and curated fonts like
+// Marianne (DSFR, fetched as woff2 then decompressed server-side to
+// OTF). For curated fonts the italic flag is significant — Marianne
+// Italic is a separate file from Marianne, not a synthesized slant.
+//
+// Server may snap to the nearest available variant when the exact
+// (weight, italic) combo is missing — that's surfaced via the
+// `x-font-resolved-weight` / `x-font-resolved-italic` headers, and we
+// log the snap so it shows up in the burn diagnostic dump.
+async function fetchFontFile(
   family: string,
   weight: number,
+  italic = false,
   subset?: string,
 ): Promise<{ name: string; buffer: ArrayBuffer } | null> {
   const safe = family.replace(/[^A-Za-z0-9]+/g, '_');
   try {
-    let url = `/api/font?family=${encodeURIComponent(family)}&weight=${weight}`;
-    if (subset) url += `&subset=${encodeURIComponent(subset)}`;
-    const res = await fetch(url);
+    const params = new URLSearchParams({
+      family,
+      weight: String(weight),
+    });
+    if (italic) params.set('italic', '1');
+    if (subset) params.set('subset', subset);
+    const res = await fetch(`/api/font?${params.toString()}`);
     if (res.ok) {
       const buffer = await res.arrayBuffer();
       if (buffer.byteLength > 0) {
@@ -363,23 +378,39 @@ async function fetchGoogleFontFile(
           sig === 0x4f54544f;   // 'OTTO'
         if (!isTTF) {
           console.warn(
-            `[burn] /api/font returned non-TTF data for ${family}@${weight} ` +
+            `[burn] /api/font returned non-TTF data for ${family}@${weight}${italic ? 'i' : ''} ` +
               `(sig=0x${sig.toString(16)}, ${buffer.byteLength} bytes) — skipping`,
           );
           return null;
         }
+        const resolvedWeight = res.headers.get('x-font-resolved-weight');
+        const resolvedItalic = res.headers.get('x-font-resolved-italic');
+        if (resolvedWeight || resolvedItalic) {
+          console.debug(
+            `[burn] /api/font snapped ${family}@${weight}${italic ? 'i' : ''} → ` +
+              `weight=${resolvedWeight ?? weight}, italic=${resolvedItalic ?? italic}`,
+          );
+        }
         console.debug(
-          `[burn] got TTF for ${family}@${weight} (${buffer.byteLength} bytes)`,
+          `[burn] got TTF/OTF for ${family}@${weight}${italic ? 'i' : ''} ` +
+            `(${buffer.byteLength} bytes)`,
         );
-        return { name: `${safe}-${weight}.ttf`, buffer };
+        // Filename is unique per (family, weight, italic) so multiple
+        // variants of the same family don't overwrite each other in
+        // fontsdir.
+        const name = `${safe}-${weight}${italic ? 'i' : ''}.ttf`;
+        return { name, buffer };
       }
     } else {
       console.warn(
-        `[burn] /api/font returned ${res.status} for ${family}@${weight}`,
+        `[burn] /api/font returned ${res.status} for ${family}@${weight}${italic ? 'i' : ''}`,
       );
     }
   } catch (err) {
-    console.warn(`[burn] font fetch failed for ${family}@${weight}`, err);
+    console.warn(
+      `[burn] font fetch failed for ${family}@${weight}${italic ? 'i' : ''}`,
+      err,
+    );
   }
   return null;
 }
@@ -720,10 +751,15 @@ async function burnSubtitlesCore(
       fontsWritten++;
     }
 
-    // Google Font for the main subtitle style.
-    const mainFont = await fetchGoogleFontFile(
+    // Main subtitle style font. The style carries an italic flag and we
+    // pass it through so curated fonts (e.g. Marianne Italic) get the
+    // correct file. Google Fonts go through the same path — italic is a
+    // no-op for them since burn-in.ts uses the libass `\i1` tag for
+    // italics rather than fetching a separate italic file.
+    const mainFont = await fetchFontFile(
       style.fontFamily,
       style.fontWeight,
+      style.italic,
     );
     if (mainFont) {
       const internal = readFontFamilyName(mainFont.buffer);
@@ -743,18 +779,23 @@ async function burnSubtitlesCore(
       fontsWritten++;
     } else {
       console.warn(
-        `[burn] no TTF available for main font "${style.fontFamily}" @ ${style.fontWeight}. ` +
+        `[burn] no TTF available for main font "${style.fontFamily}" @ ${style.fontWeight}${style.italic ? 'i' : ''}. ` +
           `Subtitles will render with libass built-in fallback font.`,
       );
     }
 
-    // Text overlay fonts (deduplicated).
-    const seen = new Set<string>([`${style.fontFamily}@${style.fontWeight}`]);
+    // Text overlay fonts (deduplicated). Key by (family, weight, italic)
+    // so a Bold and BoldItalic of the same family both get fetched.
+    const variantKey = (family: string, weight: number, italic: boolean) =>
+      `${family}@${weight}${italic ? 'i' : ''}`;
+    const seen = new Set<string>([
+      variantKey(style.fontFamily, style.fontWeight, style.italic),
+    ]);
     for (const t of textOverlays) {
-      const key = `${t.fontFamily}@${t.fontWeight}`;
+      const key = variantKey(t.fontFamily, t.fontWeight, t.italic);
       if (seen.has(key)) continue;
       seen.add(key);
-      const f = await fetchGoogleFontFile(t.fontFamily, t.fontWeight);
+      const f = await fetchFontFile(t.fontFamily, t.fontWeight, t.italic);
       if (f) {
         const internal = readFontFamilyName(f.buffer);
         if (internal) fontNameMap.set(t.fontFamily, internal);
@@ -765,18 +806,19 @@ async function burnSubtitlesCore(
         fontsWritten++;
       }
     }
-    // Per-block style override fonts. Blocks can override fontFamily and
-    // fontWeight independently — each unique combination needs its own
-    // TTF in fontsdir and a fontNameMap entry so the ASS Style line
-    // references the correct internal name.
+    // Per-block style override fonts. Blocks can override fontFamily,
+    // fontWeight and italic independently — each unique combination
+    // needs its own TTF in fontsdir and a fontNameMap entry so the ASS
+    // Style line references the correct internal name.
     for (const b of effectiveBlocks) {
       if (!b.styleOverride) continue;
       const family = b.styleOverride.fontFamily ?? style.fontFamily;
       const weight = b.styleOverride.fontWeight ?? style.fontWeight;
-      const key = `${family}@${weight}`;
+      const italic = b.styleOverride.italic ?? style.italic;
+      const key = variantKey(family, weight, italic);
       if (seen.has(key)) continue;
       seen.add(key);
-      const f = await fetchGoogleFontFile(family, weight);
+      const f = await fetchFontFile(family, weight, italic);
       if (f) {
         const internal = readFontFamilyName(f.buffer);
         if (internal) fontNameMap.set(family, internal);
@@ -799,10 +841,12 @@ async function burnSubtitlesCore(
     // family name so generateAss can wrap character runs with {\fn<name>}
     // overrides.
     for (const spec of fallbackSpecs) {
-      const key = `${spec.family}@${spec.weight}`;
+      // Fallback fonts are fetched upright only — italics are applied
+      // via the libass `\i1` tag at render time.
+      const key = variantKey(spec.family, spec.weight, false);
       if (seen.has(key)) continue;
       seen.add(key);
-      const f = await fetchGoogleFontFile(spec.family, spec.weight, spec.subset);
+      const f = await fetchFontFile(spec.family, spec.weight, false, spec.subset);
       if (f) {
         const internal = readFontFamilyName(f.buffer);
         const resolvedName = internal ?? spec.family;
