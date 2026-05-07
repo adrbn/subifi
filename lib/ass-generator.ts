@@ -26,9 +26,9 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 // libass already renders at parity with CoreText — applying the 1.7×
 // boost overshoots and produces visibly oversized text in the export.
 // Override per family in `FONT_SIZE_BOOST_OVERRIDES` below.
-const FONT_SIZE_BOOST_DEFAULT = 1.2;
+const FONT_SIZE_BOOST_DEFAULT = 1.4;
 const FONT_SIZE_BOOST_OVERRIDES: Record<string, number> = {
-  Marianne: 0.7,
+  Marianne: 0.85,
 };
 function fontSizeBoostFor(family: string): number {
   return FONT_SIZE_BOOST_OVERRIDES[family] ?? FONT_SIZE_BOOST_DEFAULT;
