@@ -26,13 +26,9 @@ import type { Style, SubtitleBlock, TextOverlay } from './types';
 // libass already renders at parity with CoreText — applying the 1.7×
 // boost overshoots and produces visibly oversized text in the export.
 // Override per family in `FONT_SIZE_BOOST_OVERRIDES` below.
-const FONT_SIZE_BOOST_DEFAULT = 1.7;
+const FONT_SIZE_BOOST_DEFAULT = 1.2;
 const FONT_SIZE_BOOST_OVERRIDES: Record<string, number> = {
-  // Marianne (DSFR) — empirically, libass rendering of the bundled OTF
-  // matches CSS/CoreText at 1:1, so no boost is required. Confirmed
-  // by rendering "Perché imparare il francese?" at fontSize=78 with
-  // boost=1.0 and matching the preview's visual width.
-  Marianne: 1.0,
+  Marianne: 0.7,
 };
 function fontSizeBoostFor(family: string): number {
   return FONT_SIZE_BOOST_OVERRIDES[family] ?? FONT_SIZE_BOOST_DEFAULT;
